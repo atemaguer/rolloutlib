@@ -36,3 +36,14 @@ git push origin vX.Y.Z
 
 GitHub Actions uses PyPI Trusted Publishing. The repository's `pypi`
 environment and trusted publisher must be configured in PyPI before release.
+
+## Documentation deployment
+
+The `docs.yml` workflow builds the MkDocs site with `--strict` and deploys the
+generated `site/` artifact to GitHub Pages whenever `main` changes. Enable
+GitHub Pages in the repository settings with **Source: GitHub Actions**. The
+published site is served at:
+
+```text
+https://atemaguer.github.io/rolloutlib/
+```
