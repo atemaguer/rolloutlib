@@ -283,8 +283,9 @@ future seams.
 
 ## Development
 
-See [SETUP.md](SETUP.md) for the complete development, optional integration,
-and release setup.
+See the [documentation source](docs/index.rst), especially
+`docs/getting-started.rst`, for development, optional integration, and release
+setup.
 
 ```bash
 uv sync
@@ -292,6 +293,7 @@ uv run pytest
 uv run ruff check rolloutlib tests
 uv run pyright
 uv build
+uv run --group docs sphinx-build -W docs docs/_build/html
 ```
 
 ## Release

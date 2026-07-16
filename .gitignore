@@ -11,3 +11,4 @@ dist/
 ENVIRONMENT_API_DESIGN_v2.md
 
 .claude/
+docs/_build/
