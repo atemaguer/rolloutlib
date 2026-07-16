@@ -283,6 +283,9 @@ future seams.
 
 ## Development
 
+See [SETUP.md](SETUP.md) for the complete development, optional integration,
+and release setup.
+
 ```bash
 uv sync
 uv run pytest
