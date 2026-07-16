@@ -1,0 +1,44 @@
+site_name: rolloutlib
+site_description: Gymnasium-style environments and rollout primitives for agentic RL post-training.
+site_url: https://atemaguer.github.io/rolloutlib/
+repo_url: https://github.com/atemaguer/rolloutlib
+repo_name: atemaguer/rolloutlib
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  font: false
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            members_order: source
+            show_root_heading: true
+            show_source: true
+            merge_init_into_class: true
+            separate_signature: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Concepts: concepts.md
+  - API reference: api.md
+  - Development: development.md

@@ -283,8 +283,8 @@ future seams.
 
 ## Development
 
-See the [documentation source](docs/index.rst), especially
-`docs/getting-started.rst`, for development, optional integration, and release
+See the [documentation source](docs/index.md), especially
+`docs/getting-started.md`, for development, optional integration, and release
 setup.
 
 ```bash
@@ -293,7 +293,7 @@ uv run pytest
 uv run ruff check rolloutlib tests
 uv run pyright
 uv build
-uv run --group docs sphinx-build -W docs docs/_build/html
+uv run --group docs mkdocs build --strict
 ```
 
 ## Release
