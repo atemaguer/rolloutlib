@@ -43,12 +43,12 @@ nav:
       - Environments: concepts/environments.md
       - Spaces: concepts/spaces.md
       - Policies and rollouts: concepts/rollouts.md
-      - Graders: concepts/graders.md
+      - Graders:
+          - Overview: concepts/graders.md
+          - Rubrics and rubric graders: graders/rubrics.md
+          - Reward graders: graders/reward-graders.md
+          - Composite graders: graders/composite-graders.md
+          - Scores and aggregation: graders/scores-and-aggregation.md
+          - Representative examples: graders/examples.md
       - Datasets and evaluation: concepts/datasets-and-evaluation.md
-  - Graders:
-      - Rubrics and rubric graders: graders/rubrics.md
-      - Reward graders: graders/reward-graders.md
-      - Composite graders: graders/composite-graders.md
-      - Scores and aggregation: graders/scores-and-aggregation.md
-      - Representative examples: graders/examples.md
   - API reference: api.md
