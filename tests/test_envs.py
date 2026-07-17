@@ -201,18 +201,18 @@ def test_as_sync_is_identity_for_gym_env_and_lifts_async_env() -> None:
     native = CountingAsyncEnv()
 
     assert as_sync(sync) is sync
-    adapted = as_sync(native)
+    bridged = as_sync(native)
     try:
-        assert isinstance(adapted, SyncFromAsync)
-        assert isinstance(adapted, gym.Env)
+        assert isinstance(bridged, SyncFromAsync)
+        assert isinstance(bridged, gym.Env)
     finally:
-        adapted.close()
+        bridged.close()
 
     with pytest.raises(TypeError, match="expected gymnasium.Env"):
         as_sync(object())  # type: ignore[arg-type]
 
 
-def test_sync_adapter_uses_one_persistent_loop_across_lifecycle() -> None:
+def test_sync_bridge_uses_one_persistent_loop_across_lifecycle() -> None:
     class LoopBoundEnv(AsyncEnv[int, int]):
         action_space = gym.spaces.Discrete(2)
         observation_space = gym.spaces.Discrete(2)
@@ -269,7 +269,7 @@ def test_sync_adapter_uses_one_persistent_loop_across_lifecycle() -> None:
         env.step(1)
 
 
-def test_sync_adapter_passes_gymnasium_env_checker() -> None:
+def test_sync_bridge_passes_gymnasium_env_checker() -> None:
     env = as_sync(CountingAsyncEnv())
     try:
         check_env(env, skip_render_check=True)

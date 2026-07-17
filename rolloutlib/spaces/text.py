@@ -26,6 +26,18 @@ class TextSpace(PydanticSpace[str]):
         sample_alphabet: str = DEFAULT_ALPHABET,
         seed: int | None = None,
     ) -> None:
+        """Initialize a constrained text space.
+
+        Args:
+            min_length: Minimum accepted and sampled string length.
+            max_length: Optional maximum accepted string length.
+            sample_max_length: Maximum length used by the sampler.
+            sample_alphabet: Characters available to the sampler.
+            seed: Optional random seed.
+
+        Returns:
+            ``None``.
+        """
         if min_length < 0:
             raise ValueError("min_length must be non-negative")
         if max_length is not None and max_length < min_length:
@@ -50,11 +62,24 @@ class TextSpace(PydanticSpace[str]):
         super().__init__(annotation, sampler=self._sample_text, seed=seed)
 
     def _sample_text(self, rng: np.random.Generator) -> str:
+        """Sample a seeded random string from the configured alphabet.
+
+        Args:
+            rng: NumPy random generator supplied by the space.
+
+        Returns:
+            Random string within the configured length bounds.
+        """
         length = int(rng.integers(self.min_length, self.sample_max_length + 1))
         indexes = rng.integers(0, len(self.sample_alphabet), size=length)
         return "".join(self.sample_alphabet[int(index)] for index in indexes)
 
     def __repr__(self) -> str:
+        """Return a concise representation of the text space.
+
+        Returns:
+            Human-readable length constraints.
+        """
         return f"TextSpace(min_length={self.min_length}, max_length={self.max_length})"
 
 
@@ -66,6 +91,18 @@ def text(
     sample_alphabet: str = DEFAULT_ALPHABET,
     seed: int | None = None,
 ) -> TextSpace:
+    """Construct a length-constrained text space.
+
+    Args:
+        min_length: Minimum accepted and sampled string length.
+        max_length: Optional maximum accepted string length.
+        sample_max_length: Maximum length used by the sampler.
+        sample_alphabet: Characters available to the sampler.
+        seed: Optional random seed.
+
+    Returns:
+        Configured ``TextSpace`` instance.
+    """
     return TextSpace(
         min_length=min_length,
         max_length=max_length,

@@ -1,4 +1,4 @@
-"""Adapters between synchronous and asynchronous environment conventions."""
+"""Bridges between synchronous and asynchronous environment conventions."""
 
 from __future__ import annotations
 
@@ -26,6 +26,14 @@ class AsyncFromSync(AsyncEnv[ObsT, ActT]):
     """
 
     def __init__(self, env: gym.Env[ObsT, ActT]) -> None:
+        """Create an asynchronous bridge around a Gymnasium environment.
+
+        Args:
+            env: Synchronous environment to execute in a worker thread.
+
+        Returns:
+            ``None``.
+        """
         if not isinstance(env, gym.Env):
             raise TypeError(f"expected gymnasium.Env, got {type(env).__name__}")
         self.env = env
@@ -41,6 +49,15 @@ class AsyncFromSync(AsyncEnv[ObsT, ActT]):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[ObsT, dict[str, Any]]:
+        """Reset the wrapped environment without blocking the event loop.
+
+        Args:
+            seed: Optional reset seed.
+            options: Optional application-defined reset options.
+
+        Returns:
+            The wrapped environment's initial observation and info dictionary.
+        """
         async with self._call_lock:
             self._ensure_open()
             return await self._run_sync(
@@ -50,6 +67,14 @@ class AsyncFromSync(AsyncEnv[ObsT, ActT]):
     async def step(
         self, action: ActT
     ) -> tuple[ObsT, float, bool, bool, dict[str, Any]]:
+        """Advance the wrapped environment asynchronously.
+
+        Args:
+            action: Action passed to the wrapped environment.
+
+        Returns:
+            The standard Gymnasium five-tuple.
+        """
         async with self._call_lock:
             self._ensure_open()
             observation, reward, terminated, truncated, info = await self._run_sync(
@@ -58,6 +83,11 @@ class AsyncFromSync(AsyncEnv[ObsT, ActT]):
             return observation, float(reward), terminated, truncated, info
 
     async def close(self) -> None:
+        """Close the wrapped environment exactly once.
+
+        Returns:
+            ``None``.
+        """
         async with self._call_lock:
             if self._closed:
                 return
@@ -65,13 +95,20 @@ class AsyncFromSync(AsyncEnv[ObsT, ActT]):
             self._closed = True
 
     async def _run_sync(self, call: Callable[[], ResultT]) -> ResultT:
-        """Run ``call`` without releasing serialization early on cancellation."""
+        """Run a synchronous callable in a worker thread.
+
+        Args:
+            call: Zero-argument callable to execute.
+
+        Returns:
+            The callable's return value.
+        """
         task = asyncio.create_task(asyncio.to_thread(call))
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
             # The worker thread cannot be cancelled. Wait for it before allowing a
-            # subsequent stateful call to acquire this adapter's lock.
+            # subsequent stateful call to acquire this bridge's lock.
             while not task.done():
                 try:
                     await asyncio.shield(task)
@@ -87,6 +124,11 @@ class AsyncFromSync(AsyncEnv[ObsT, ActT]):
             raise
 
     def _ensure_open(self) -> None:
+        """Raise ``RuntimeError`` if the wrapped environment is closed.
+
+        Returns:
+            ``None``.
+        """
         if self._closed:
             raise RuntimeError("environment is closed")
 
@@ -94,12 +136,20 @@ class AsyncFromSync(AsyncEnv[ObsT, ActT]):
 class SyncFromAsync(gym.Env[ObsT, ActT]):
     """Expose an async environment through the synchronous Gymnasium API.
 
-    The adapter owns one persistent event loop in a background thread. Async
+    The bridge owns one persistent event loop in a background thread. Async
     resources used by the environment should be created on that loop (typically
-    lazily during ``reset``) and remain there for the adapter's lifetime.
+    lazily during ``reset``) and remain there for the bridge's lifetime.
     """
 
     def __init__(self, env: AsyncEnv[ObsT, ActT]) -> None:
+        """Create a synchronous bridge around an async environment.
+
+        Args:
+            env: Asynchronous environment to run on a background event loop.
+
+        Returns:
+            ``None``.
+        """
         super().__init__()
         if not isinstance(env, AsyncEnv):
             raise TypeError(f"expected AsyncEnv, got {type(env).__name__}")
@@ -125,6 +175,15 @@ class SyncFromAsync(gym.Env[ObsT, ActT]):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[ObsT, dict[str, Any]]:
+        """Synchronously reset the wrapped asynchronous environment.
+
+        Args:
+            seed: Optional reset seed.
+            options: Optional application-defined reset options.
+
+        Returns:
+            The wrapped environment's initial observation and info dictionary.
+        """
         self._ensure_not_loop_thread()
         with self._call_lock:
             self._ensure_open()
@@ -132,6 +191,14 @@ class SyncFromAsync(gym.Env[ObsT, ActT]):
             return self._run_async(self.env.reset(seed=seed, options=options))
 
     def step(self, action: ActT) -> tuple[ObsT, float, bool, bool, dict[str, Any]]:
+        """Synchronously advance the wrapped asynchronous environment.
+
+        Args:
+            action: Action passed to the wrapped environment.
+
+        Returns:
+            The standard Gymnasium five-tuple.
+        """
         self._ensure_not_loop_thread()
         with self._call_lock:
             self._ensure_open()
@@ -141,6 +208,11 @@ class SyncFromAsync(gym.Env[ObsT, ActT]):
             return observation, float(reward), terminated, truncated, info
 
     def close(self) -> None:
+        """Close the wrapped environment and stop its background event loop.
+
+        Returns:
+            ``None``.
+        """
         self._ensure_not_loop_thread()
         should_stop = False
         try:
@@ -158,6 +230,11 @@ class SyncFromAsync(gym.Env[ObsT, ActT]):
                 self._loop_thread.join()
 
     def _run_event_loop(self) -> None:
+        """Run and then clean up the bridge's persistent event loop.
+
+        Returns:
+            ``None``.
+        """
         asyncio.set_event_loop(self._loop)
         self._loop_ready.set()
         try:
@@ -175,6 +252,14 @@ class SyncFromAsync(gym.Env[ObsT, ActT]):
             self._loop.close()
 
     def _run_async(self, coroutine: Coroutine[Any, Any, ResultT]) -> ResultT:
+        """Execute a coroutine on the bridge's background event loop.
+
+        Args:
+            coroutine: Coroutine to execute.
+
+        Returns:
+            The coroutine's result.
+        """
         future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
         try:
             return future.result()
@@ -192,18 +277,32 @@ class SyncFromAsync(gym.Env[ObsT, ActT]):
             raise
 
     def _ensure_not_loop_thread(self) -> None:
+        """Reject calls made recursively from the bridge event-loop thread.
+
+        Returns:
+            ``None``.
+        """
         if threading.current_thread() is self._loop_thread:
             raise RuntimeError(
-                "synchronous adapter methods cannot be called from their event-loop "
+                "synchronous bridge methods cannot be called from their event-loop "
                 "thread"
             )
 
     def _ensure_open(self) -> None:
+        """Raise ``RuntimeError`` if this bridge has been closed.
+
+        Returns:
+            ``None``.
+        """
         if self._closed:
             raise RuntimeError("environment is closed")
 
     def _detach(self) -> AsyncEnv[ObsT, ActT]:
-        """Stop this adapter's loop without closing its inner environment."""
+        """Stop this bridge's loop without closing its inner environment.
+
+        Returns:
+            The still-open inner asynchronous environment.
+        """
         self._ensure_not_loop_thread()
         should_stop = False
         with self._call_lock:
@@ -217,17 +316,42 @@ class SyncFromAsync(gym.Env[ObsT, ActT]):
 
 
 @overload
-def as_async(env: AsyncEnv[ObsT, ActT]) -> AsyncEnv[ObsT, ActT]: ...
+def as_async(env: AsyncEnv[ObsT, ActT]) -> AsyncEnv[ObsT, ActT]:
+    """Type-only overload for an already asynchronous environment.
+
+    Args:
+        env: Asynchronous environment to preserve.
+
+    Returns:
+        The same asynchronous environment type.
+    """
+    ...
 
 
 @overload
-def as_async(env: gym.Env[ObsT, ActT]) -> AsyncEnv[ObsT, ActT]: ...
+def as_async(env: gym.Env[ObsT, ActT]) -> AsyncEnv[ObsT, ActT]:
+    """Type-only overload for adapting a synchronous environment.
+
+    Args:
+        env: Synchronous Gymnasium environment to adapt.
+
+    Returns:
+        An asynchronous environment wrapper.
+    """
+    ...
 
 
 def as_async(
     env: AsyncEnv[ObsT, ActT] | gym.Env[ObsT, ActT],
 ) -> AsyncEnv[ObsT, ActT]:
-    """Return ``env`` in the async convention without rewriting sync envs."""
+    """Return an environment in the asynchronous convention.
+
+    Args:
+        env: A synchronous Gymnasium or asynchronous rolloutlib environment.
+
+    Returns:
+        An ``AsyncEnv``; existing async environments are returned unchanged.
+    """
     if isinstance(env, SyncFromAsync):
         return env._detach()
     if isinstance(env, AsyncEnv):
@@ -240,17 +364,43 @@ def as_async(
 
 
 @overload
-def as_sync(env: gym.Env[ObsT, ActT]) -> gym.Env[ObsT, ActT]: ...
+def as_sync(env: gym.Env[ObsT, ActT]) -> gym.Env[ObsT, ActT]:
+    """Type-only overload for an already synchronous environment.
+
+    Args:
+        env: Synchronous environment to preserve.
+
+    Returns:
+        The same synchronous environment type.
+    """
+    ...
 
 
 @overload
-def as_sync(env: AsyncEnv[ObsT, ActT]) -> SyncFromAsync[ObsT, ActT]: ...
+def as_sync(env: AsyncEnv[ObsT, ActT]) -> SyncFromAsync[ObsT, ActT]:
+    """Type-only overload for adapting an asynchronous environment.
+
+    Args:
+        env: Asynchronous environment to adapt.
+
+    Returns:
+        A synchronous bridge around the asynchronous environment.
+    """
+    ...
 
 
 def as_sync(
     env: gym.Env[ObsT, ActT] | AsyncEnv[ObsT, ActT],
 ) -> gym.Env[ObsT, ActT]:
-    """Return ``env`` in the synchronous Gymnasium convention."""
+    """Return an environment in the synchronous Gymnasium convention.
+
+    Args:
+        env: A synchronous Gymnasium or asynchronous rolloutlib environment.
+
+    Returns:
+        A Gymnasium environment; existing synchronous environments are returned
+        unchanged.
+    """
     if isinstance(env, AsyncFromSync):
         return env.env
     if isinstance(env, gym.Env):

@@ -63,9 +63,9 @@ may return a `Score` directly from `evaluate`; existing environments can be
 composed with a grading wrapper:
 
 ```python
-from rolloutlib import GradingWrapper
+from rolloutlib import wrappers
 
-environment = GradingWrapper(
+environment = wrappers.GradingWrapper(
     ExistingEnv(item),
     grader=grader,
     make_input=lambda env, action: (item, env.state, action),
@@ -102,6 +102,70 @@ at space boundaries; applications do not need to construct framework-specific
 message or tool-call model objects. `TextSpace` accepts all Unicode strings
 that satisfy its length constraints. Its `sample_alphabet` only controls
 random sampling.
+
+Existing Gymnasium environments can be presented to language agents with
+rolloutlib's Gymnasium-native wrappers:
+
+```python
+import gymnasium as gym
+
+from rolloutlib import wrappers
+
+env = wrappers.wrap_language_env(
+    gym.make("CartPole-v1", render_mode="rgb_array"),
+    include_render=True,
+    instructions="Actions: 0 pushes left; 1 pushes right.",
+)
+```
+
+Without configuration, native observations are JSON-serialized from their
+Gymnasium space and native actions are exposed as one validated tool call.
+State, image, and audio selectors cover environments that need a more semantic
+or multimodal presentation without requiring callers to build message
+dictionaries or data URLs.
+
+The transformed environment remains a normal `gymnasium.Env`. Provider policies
+can derive tool definitions directly from it:
+
+```python
+from openai import OpenAI
+
+from rolloutlib import rollout
+from rolloutlib.policies import OpenAIResponsesPolicy
+
+policy = OpenAIResponsesPolicy.from_env(
+    env,
+    client=OpenAI(),
+    model="your-model",
+)
+trajectory = rollout(env, policy)
+```
+
+See the
+[environment guide](docs/concepts/environments.md#wrapping-gymnasium-environments-for-language-agents)
+for validation and a multimodal example.
+
+The opt-in OpenAI chess integration exercises this path against the real
+`BulletChess-v0` Gymnasium environment. It runs 20 self-play steps with
+`gpt-5.6-luna` at reasoning effort `none`, sends the rendered board and legal
+moves to the OpenAI Responses API, applies every returned tool call, and
+verifies that the environment accepted every move:
+
+```console
+uv sync --extra openai-chess
+export OPENAI_API_KEY=...
+RUN_OPENAI_CHESS_INTEGRATION=1 uv run pytest \
+  tests/test_openai_chess_integration.py -q
+```
+
+Set `OPENAI_CHESS_MODEL` to override the default model. This test makes 20 paid
+API requests and is skipped during ordinary test runs.
+
+The same wrapper and OpenAI policy path has also been validated against
+FinRL's continuous stock actions, FinRL-Meta's market-impact portfolio
+environment, and the FinRL portfolio environment consumed by FinRL-trading.
+See the [FinRL integration guide](docs/integrations/finrl.md) for the minimal
+wrapper code and reproducible synthetic-market tests.
 
 ## Rollouts
 

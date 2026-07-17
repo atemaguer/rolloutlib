@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import gymnasium as gym
+import numpy as np
 import pytest
 from gymnasium.utils.env_checker import check_env
 from pydantic import ValidationError
@@ -140,6 +141,84 @@ def test_common_spaces_sample_values_they_contain_and_round_trip_json() -> None:
     assert isinstance(spaces.Message(), spaces.MessageSpace)
     assert isinstance(spaces.Chat(), spaces.ChatSpace)
     assert isinstance(spaces.ToolCall({"search": gym.spaces.Dict({})}), spaces.ToolCallSpace)
+
+
+def test_single_value_json_codecs_round_trip_nested_gymnasium_spaces() -> None:
+    space = gym.spaces.Dict(
+        {
+            "choice": gym.spaces.Discrete(3),
+            "coordinates": gym.spaces.Box(
+                low=-1.0,
+                high=1.0,
+                shape=(2,),
+                dtype=np.float32,
+            ),
+            "label": gym.spaces.Text(min_length=1, max_length=8),
+        }
+    )
+    value = {
+        "choice": np.int64(2),
+        "coordinates": np.array([0.25, -0.5], dtype=np.float32),
+        "label": "move",
+    }
+
+    encoded = spaces.to_json_value(space, value)
+    decoded = spaces.from_json_value(space, encoded)
+
+    assert encoded == {
+        "choice": 2,
+        "coordinates": [0.25, -0.5],
+        "label": "move",
+    }
+    assert decoded in space
+    assert decoded["choice"] == 2
+    np.testing.assert_array_equal(decoded["coordinates"], value["coordinates"])
+
+
+def test_json_schema_describes_common_action_spaces() -> None:
+    schema = spaces.to_json_schema(
+        gym.spaces.Dict(
+            {
+                "choice": gym.spaces.Discrete(3),
+                "label": spaces.text.text(min_length=1, max_length=8),
+            }
+        )
+    )
+
+    assert schema == {
+        "type": "object",
+        "properties": {
+            "choice": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2,
+            },
+            "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8,
+            },
+        },
+        "required": ["choice", "label"],
+        "additionalProperties": False,
+    }
+
+
+def test_tool_call_space_json_uses_unbatched_argument_objects() -> None:
+    space = spaces.tools.call(
+        {
+            "play": gym.spaces.Dict(
+                {"move": gym.spaces.Text(min_length=4, max_length=5)}
+            )
+        }
+    )
+    value: ToolCall = {"name": "play", "arguments": {"move": "e2e4"}}
+
+    encoded = space.to_jsonable([value])
+    decoded = space.from_jsonable(encoded)
+
+    assert encoded == [{"name": "play", "arguments": {"move": "e2e4"}}]
+    assert decoded == [value]
 
 
 def test_seeded_domain_spaces_are_reproducible() -> None:

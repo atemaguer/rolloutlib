@@ -11,7 +11,16 @@ def id(
     start: int = 0,
     seed: int | None = None,
 ) -> Discrete:
-    """Return a space for a single token id."""
+    """Construct a space for a single token id.
+
+    Args:
+        vocab_size: Number of token IDs in the vocabulary.
+        start: First integer represented by the space.
+        seed: Optional random seed.
+
+    Returns:
+        Gymnasium ``Discrete`` space for token IDs.
+    """
 
     if vocab_size <= 0:
         raise ValueError("vocab_size must be positive")
@@ -25,7 +34,17 @@ def sequence(
     stack: bool = False,
     seed: int | None = None,
 ) -> Sequence:
-    """Return a variable-length sequence of token ids."""
+    """Construct a variable-length sequence space of token IDs.
+
+    Args:
+        vocab_size: Number of token IDs in the vocabulary.
+        start: First integer represented by the element space.
+        stack: Whether sampled sequences should be stacked when possible.
+        seed: Optional random seed.
+
+    Returns:
+        Gymnasium ``Sequence`` space containing token-id elements.
+    """
 
     return Sequence(
         id(vocab_size, start=start),

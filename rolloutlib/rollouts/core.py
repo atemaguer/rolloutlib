@@ -43,6 +43,12 @@ class PolicyOutput(Generic[ActionT]):
     stop_reason: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
+        """Normalize sampling metadata and expose it in consistent types.
+
+        Returns:
+            ``None``. The dataclass fields are normalized during
+            initialization.
+        """
         info = dict(self.info)
         tokens = self.tokens
         if tokens is None and isinstance(info.get("tokens"), Sequence) and not isinstance(
@@ -72,7 +78,16 @@ class Policy(Protocol[PolicyObservationT, PolicyActionT]):
 
     def __call__(
         self, observation: PolicyObservationT, /
-    ) -> PolicyActionT | PolicyOutput[PolicyActionT]: ...
+    ) -> PolicyActionT | PolicyOutput[PolicyActionT]:
+        """Map one observation to an action or structured policy output.
+
+        Args:
+            observation: Observation supplied by the environment.
+
+        Returns:
+            An environment action or a :class:`PolicyOutput` containing one.
+        """
+        ...
 
 
 class AsyncPolicy(Protocol[PolicyObservationT, PolicyActionT]):
@@ -84,7 +99,16 @@ class AsyncPolicy(Protocol[PolicyObservationT, PolicyActionT]):
         PolicyActionT
         | PolicyOutput[PolicyActionT]
         | Awaitable[PolicyActionT | PolicyOutput[PolicyActionT]]
-    ): ...
+    ):
+        """Map one observation to an action, optionally asynchronously.
+
+        Args:
+            observation: Observation supplied by the environment.
+
+        Returns:
+            An action, :class:`PolicyOutput`, or awaitable resolving to one.
+        """
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +128,12 @@ class Step(Generic[ObservationT, ActionT]):
     policy_stop_reason: str | None = None
 
     def __post_init__(self) -> None:
+        """Normalize reward and policy metadata for serialization.
+
+        Returns:
+            ``None``. The dataclass fields are normalized during
+            initialization.
+        """
         object.__setattr__(self, "reward", float(self.reward))
         object.__setattr__(self, "info", dict(self.info))
         object.__setattr__(self, "policy_info", dict(self.policy_info))
@@ -124,7 +154,11 @@ class Step(Generic[ObservationT, ActionT]):
 
     @property
     def score(self) -> Score | None:
-        """Return the structured score produced by this environment step."""
+        """Return the structured score produced by this environment step.
+
+        Returns:
+            A :class:`Score` from ``info``, or ``None`` when no score exists.
+        """
 
         return Score.from_info(self.info)
 
@@ -141,6 +175,12 @@ class Trajectory(Generic[ObservationT, ActionT]):
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Normalize steps, metadata, and episode flags.
+
+        Returns:
+            ``None``. The dataclass fields are normalized during
+            initialization.
+        """
         object.__setattr__(self, "steps", tuple(self.steps))
         object.__setattr__(self, "initial_info", dict(self.initial_info))
         object.__setattr__(self, "metadata", dict(self.metadata))
@@ -148,34 +188,68 @@ class Trajectory(Generic[ObservationT, ActionT]):
         object.__setattr__(self, "truncated", bool(self.truncated))
 
     def __len__(self) -> int:
+        """Return the number of environment steps in the trajectory.
+
+        Returns:
+            The number of recorded steps as an integer.
+        """
         return len(self.steps)
 
     def __iter__(self) -> Iterator[Step[ObservationT, ActionT]]:
+        """Return an iterator over recorded environment steps.
+
+        Returns:
+            An iterator yielding steps in collection order.
+        """
         return iter(self.steps)
 
     @property
     def observations(self) -> tuple[ObservationT, ...]:
+        """Return the initial observation followed by each next observation.
+
+        Returns:
+            A tuple containing one more observation than the number of steps.
+        """
         return (self.initial_observation,) + tuple(
             step.next_observation for step in self.steps
         )
 
     @property
     def actions(self) -> tuple[ActionT, ...]:
+        """Return actions in the order they were applied.
+
+        Returns:
+            A tuple of actions recorded in the trajectory.
+        """
         return tuple(step.action for step in self.steps)
 
     @property
     def rewards(self) -> tuple[float, ...]:
+        """Return environment rewards in step order.
+
+        Returns:
+            A tuple of scalar rewards recorded in the trajectory.
+        """
         return tuple(step.reward for step in self.steps)
 
     @property
     def total_reward(self) -> float:
-        """The undiscounted sum of environment step rewards."""
+        """Return the undiscounted sum of environment step rewards.
+
+        Returns:
+            The scalar episode return.
+        """
 
         return sum(self.rewards)
 
     @property
     def score(self) -> Score:
-        """Return the terminal environment score or the scalar episode return."""
+        """Return the terminal score or a score derived from episode return.
+
+        Returns:
+            The final step's structured score when available, otherwise a
+            :class:`Score` containing :attr:`total_reward`.
+        """
 
         if self.steps:
             score = self.steps[-1].score
@@ -185,7 +259,11 @@ class Trajectory(Generic[ObservationT, ActionT]):
 
     @property
     def complete(self) -> bool:
-        """Whether collection ended through termination or truncation."""
+        """Return whether collection ended through termination or truncation.
+
+        Returns:
+            ``True`` when the trajectory terminated or was truncated.
+        """
 
         return self.terminated or self.truncated
 
@@ -210,6 +288,14 @@ class TrajectoryGroup(Generic[ItemT, ObservationT, ActionT]):
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Normalize trajectories, scores, errors, and metadata.
+
+        Returns:
+            ``None``. Missing scores are inferred from the trajectories.
+
+        Raises:
+            ValueError: If the number of scores differs from trajectories.
+        """
         trajectories = tuple(self.trajectories)
         scores = tuple(self.scores)
         if not scores:
@@ -223,18 +309,41 @@ class TrajectoryGroup(Generic[ItemT, ObservationT, ActionT]):
 
     @property
     def rewards(self) -> tuple[float, ...]:
-        """The scalar scores consumed by a training algorithm."""
+        """Return scalar scores suitable for consumption by training code.
+
+        Returns:
+            A tuple containing one scalar value per trajectory score.
+        """
 
         return tuple(score.value for score in self.scores)
 
 
 def _normalize_policy_output(value: object) -> PolicyOutput[Any]:
+    """Convert a raw policy result into a :class:`PolicyOutput`.
+
+    Args:
+        value: Raw action or already-structured policy result.
+
+    Returns:
+        A normalized :class:`PolicyOutput` instance.
+    """
     if isinstance(value, PolicyOutput):
         return value
     return PolicyOutput(action=value)
 
 
 def _sync_policy_output(value: object) -> PolicyOutput[Any]:
+    """Validate and normalize the result returned by a sync policy.
+
+    Args:
+        value: Value returned by a synchronous policy callable.
+
+    Returns:
+        A normalized :class:`PolicyOutput` instance.
+
+    Raises:
+        TypeError: If ``value`` is awaitable rather than an immediate result.
+    """
     if inspect.isawaitable(value):
         close = getattr(value, "close", None)
         if callable(close):
@@ -244,6 +353,14 @@ def _sync_policy_output(value: object) -> PolicyOutput[Any]:
 
 
 def _policy_info(output: PolicyOutput[Any]) -> dict[str, Any]:
+    """Combine structured policy metadata into a serializable info mapping.
+
+    Args:
+        output: Normalized policy output containing optional sampling fields.
+
+    Returns:
+        A dictionary containing explicit and structured policy metadata.
+    """
     info = dict(output.info)
     if output.tokens is not None:
         info.setdefault("tokens", output.tokens)
@@ -263,7 +380,23 @@ def rollout(
     max_steps: int | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> Trajectory[ObservationT, ActionT]:
-    """Collect one synchronous trajectory without closing ``environment``."""
+    """Collect one synchronous trajectory without closing ``environment``.
+
+    Args:
+        environment: Gymnasium-compatible environment to interact with.
+        policy: Synchronous callable mapping observations to actions.
+        seed: Optional reset seed passed to the environment.
+        options: Optional reset options passed to the environment.
+        max_steps: Optional maximum number of actions before truncation.
+        metadata: Optional metadata attached to the returned trajectory.
+
+    Returns:
+        The collected trajectory, including all steps and final flags.
+
+    Raises:
+        ValueError: If ``max_steps`` is negative.
+        TypeError: If the policy returns an awaitable.
+    """
 
     if max_steps is not None and max_steps < 0:
         raise ValueError("max_steps must be non-negative")
@@ -314,7 +447,22 @@ async def arollout(
     max_steps: int | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> Trajectory[ObservationT, ActionT]:
-    """Collect one asynchronous trajectory without closing ``environment``."""
+    """Collect one asynchronous trajectory without closing ``environment``.
+
+    Args:
+        environment: Asynchronous environment to interact with.
+        policy: Async-compatible callable mapping observations to actions.
+        seed: Optional reset seed passed to the environment.
+        options: Optional reset options passed to the environment.
+        max_steps: Optional maximum number of actions before truncation.
+        metadata: Optional metadata attached to the returned trajectory.
+
+    Returns:
+        The collected trajectory, including all steps and final flags.
+
+    Raises:
+        ValueError: If ``max_steps`` is negative.
+    """
 
     if max_steps is not None and max_steps < 0:
         raise ValueError("max_steps must be non-negative")
@@ -369,7 +517,23 @@ def rollout_group(
     max_steps: int | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> TrajectoryGroup[ItemT, ObservationT, ActionT]:
-    """Collect independent synchronous trajectories for one item."""
+    """Collect independent synchronous trajectories for one item.
+
+    Args:
+        item: Dataset item used to create each environment.
+        make_env: Factory returning a fresh environment for ``item``.
+        policy: Synchronous callable mapping observations to actions.
+        num_rollouts: Number of independent trajectories to collect.
+        item_id: Optional stable identifier for the item.
+        max_steps: Optional per-trajectory action limit.
+        metadata: Optional metadata attached to the trajectory group.
+
+    Returns:
+        A trajectory group containing the requested rollouts and scores.
+
+    Raises:
+        ValueError: If ``num_rollouts`` is less than one.
+    """
 
     if num_rollouts < 1:
         raise ValueError("num_rollouts must be at least 1")
@@ -402,7 +566,24 @@ async def arollout_group(
     concurrency: int = 1,
     metadata: Mapping[str, Any] | None = None,
 ) -> TrajectoryGroup[ItemT, ObservationT, ActionT]:
-    """Collect asynchronous trajectories for one item with bounded concurrency."""
+    """Collect asynchronous trajectories for one item with bounded concurrency.
+
+    Args:
+        item: Dataset item used to create each environment.
+        make_env: Sync or async factory returning a fresh async environment.
+        policy: Async-compatible callable mapping observations to actions.
+        num_rollouts: Number of independent trajectories to collect.
+        item_id: Optional stable identifier for the item.
+        max_steps: Optional per-trajectory action limit.
+        concurrency: Maximum number of environments collected concurrently.
+        metadata: Optional metadata attached to the trajectory group.
+
+    Returns:
+        A trajectory group containing the requested rollouts and scores.
+
+    Raises:
+        ValueError: If ``num_rollouts`` or ``concurrency`` is less than one.
+    """
 
     if num_rollouts < 1:
         raise ValueError("num_rollouts must be at least 1")
@@ -411,6 +592,11 @@ async def arollout_group(
     semaphore = asyncio.Semaphore(concurrency)
 
     async def collect_one() -> Trajectory[ObservationT, ActionT]:
+        """Collect one trajectory while holding a concurrency permit.
+
+        Returns:
+            A trajectory collected from a fresh environment instance.
+        """
         async with semaphore:
             environment = make_env(item)
             if inspect.isawaitable(environment):

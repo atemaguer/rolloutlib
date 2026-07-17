@@ -18,8 +18,14 @@ async def check_async_env(
     This intentionally mirrors the most important value-level checks from
     Gymnasium's checker without assuming that a random action is valid for
     every application-specific environment.
-    """
+    Args:
+        env: Asynchronous environment to validate.
+        seed: Seed used for the reset check.
+        action: Optional explicit action; otherwise one is sampled.
 
+    Returns:
+        ``None``. Raises ``AssertionError`` when a contract check fails.
+    """
     observation, info = await env.reset(seed=seed)
     if not isinstance(info, dict):
         raise AssertionError("reset() info must be a dictionary")

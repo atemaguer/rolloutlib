@@ -13,6 +13,22 @@ dependencies = [
 benchmarks = [
     "datasets>=3.0",
 ]
+media = [
+    "pillow>=10.0",
+]
+openai = [
+    "openai>=2.0",
+    "pillow>=10.0",
+]
+openai-chess = [
+    "gym-bullet-chess[render]>=0.0.1",
+    "openai>=2.0",
+    "pillow>=10.0",
+]
+openai-finrl = [
+    "openai>=2.0",
+    "yfinance>=0.2.50",
+]
 
 [project.urls]
 Homepage = "https://github.com/atemaguer/rolloutlib"

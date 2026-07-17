@@ -2,14 +2,12 @@
 
 from importlib.metadata import version
 
-from . import datasets, envs, evals, graders, rollouts, spaces
+from . import content, datasets, envs, evals, graders, policies, rollouts, spaces, wrappers
 from .datasets import Dataset, RLDataset
 from .envs import (
     AsyncEnv,
-    AsyncGradingWrapper,
     AsyncSingleTurnEnv,
     Env,
-    GradingWrapper,
     SingleTurnEnv,
     as_async,
     as_sync,
@@ -29,6 +27,14 @@ from .rollouts import (
     rollout,
     rollout_group,
 )
+from .wrappers import (
+    AsyncGradingWrapper,
+    ChatHistoryWrapper,
+    ChatObservationWrapper,
+    GradingWrapper,
+    ToolCallActionWrapper,
+    wrap_language_env,
+)
 
 __version__ = version("rolloutlib")
 
@@ -38,6 +44,8 @@ __all__ = [
     "AsyncGrader",
     "AsyncPolicy",
     "AsyncSingleTurnEnv",
+    "ChatObservationWrapper",
+    "ChatHistoryWrapper",
     "Dataset",
     "Criterion",
     "Env",
@@ -54,18 +62,23 @@ __all__ = [
     "Step",
     "Trajectory",
     "TrajectoryGroup",
+    "ToolCallActionWrapper",
     "__version__",
     "as_async",
     "as_sync",
     "arollout",
     "arollout_group",
     "check_async_env",
+    "content",
     "datasets",
     "envs",
     "evals",
     "graders",
+    "policies",
     "rollout",
     "rollout_group",
     "rollouts",
     "spaces",
+    "wrappers",
+    "wrap_language_env",
 ]

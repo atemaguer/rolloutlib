@@ -21,6 +21,15 @@ EvaluationResult = ScoreValue | tuple[ScoreValue, dict[str, Any]]
 
 
 def _resolve_evaluation(value: EvaluationResult) -> tuple[float, dict[str, Any]]:
+    """Convert an evaluation result into a scalar reward and info mapping.
+
+    Args:
+        value: A scalar score or a score paired with additional step info.
+
+    Returns:
+        A ``(reward, info)`` tuple with any structured score serialized into
+        the info mapping.
+    """
     if isinstance(value, tuple):
         result, info = value
     else:
@@ -61,7 +70,15 @@ class AsyncEnv(Generic[ObsT, ActT], ABC):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[ObsT, dict[str, Any]]:
-        """Reset the environment and return its first observation and info."""
+        """Reset the environment and return its first observation and info.
+
+        Args:
+            seed: Optional seed used to initialize the environment RNG.
+            options: Optional application-defined reset options.
+
+        Returns:
+            The initial observation and an info dictionary.
+        """
         if seed is not None:
             self._np_random, self._np_random_seed = seeding.np_random(seed)
 
@@ -69,22 +86,42 @@ class AsyncEnv(Generic[ObsT, ActT], ABC):
     async def step(
         self, action: ActT
     ) -> tuple[ObsT, float, bool, bool, dict[str, Any]]:
-        """Advance the environment by one step."""
+        """Advance the environment by one step.
+
+        Args:
+            action: Action accepted by ``action_space``.
+
+        Returns:
+            The Gymnasium five-tuple ``(observation, reward, terminated,
+            truncated, info)``.
+        """
         raise NotImplementedError
 
     async def close(self) -> None:
-        """Release resources owned by the environment."""
+        """Release resources owned by the environment.
+
+        Returns:
+            ``None``.
+        """
 
     @property
     def np_random(self) -> np.random.Generator:
-        """Return the environment RNG, initializing it lazily when necessary."""
+        """Return the environment RNG, initializing it lazily when necessary.
+
+        Returns:
+            The NumPy random generator used by the environment.
+        """
         if self._np_random is None:
             self._np_random, self._np_random_seed = seeding.np_random()
         return self._np_random
 
     @property
     def np_random_seed(self) -> int:
-        """Return the seed associated with :attr:`np_random`."""
+        """Return the seed associated with :attr:`np_random`.
+
+        Returns:
+            The integer seed associated with the environment RNG.
+        """
         if self._np_random_seed is None:
             self._np_random, self._np_random_seed = seeding.np_random()
         return self._np_random_seed
@@ -98,6 +135,11 @@ class SingleTurnEnv(gym.Env[ObsT, ActT], ABC):
     """
 
     def __init__(self) -> None:
+        """Initialize an inactive single-turn environment.
+
+        Returns:
+            ``None``.
+        """
         super().__init__()
         self._episode_active = False
 
@@ -107,12 +149,29 @@ class SingleTurnEnv(gym.Env[ObsT, ActT], ABC):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[ObsT, dict[str, Any]]:
+        """Reset the episode and return its initial observation and info.
+
+        Args:
+            seed: Optional seed used to initialize the Gymnasium RNG.
+            options: Optional application-defined reset options.
+
+        Returns:
+            The observation and info produced by ``initial_observation``.
+        """
         super().reset(seed=seed)
         observation, info = self.initial_observation(options=options)
         self._episode_active = True
         return observation, info
 
     def step(self, action: ActT) -> tuple[ObsT, float, bool, bool, dict[str, Any]]:
+        """Evaluate one action and complete the single-turn episode.
+
+        Args:
+            action: Action accepted by ``action_space``.
+
+        Returns:
+            A terminal Gymnasium five-tuple containing the evaluated reward.
+        """
         self._require_active_episode()
         reward, info = _resolve_evaluation(self.evaluate(action))
         observation = self.terminal_observation(action)
@@ -120,6 +179,11 @@ class SingleTurnEnv(gym.Env[ObsT, ActT], ABC):
         return observation, reward, True, False, info
 
     def _require_active_episode(self) -> None:
+        """Raise ``RuntimeError`` unless an episode is currently active.
+
+        Returns:
+            ``None``.
+        """
         if not self._episode_active:
             raise RuntimeError(
                 "reset() must be called before step() and after an episode ends"
@@ -129,17 +193,38 @@ class SingleTurnEnv(gym.Env[ObsT, ActT], ABC):
     def initial_observation(
         self, *, options: dict[str, Any] | None = None
     ) -> tuple[ObsT, dict[str, Any]]:
-        """Return the observation and info presented by ``reset``."""
+        """Return the observation and info presented by ``reset``.
+
+        Args:
+            options: Optional application-defined reset options.
+
+        Returns:
+            The initial observation and its info dictionary.
+        """
         raise NotImplementedError
 
     @abstractmethod
     def evaluate(self, action: ActT) -> EvaluationResult:
-        """Grade the action and return a score, optionally with extra info."""
+        """Grade an action and return its score, optionally with extra info.
+
+        Args:
+            action: Action to evaluate.
+
+        Returns:
+            A scalar or structured score, optionally paired with step info.
+        """
         raise NotImplementedError
 
     @abstractmethod
     def terminal_observation(self, action: ActT) -> ObsT:
-        """Return the terminal observation produced after ``action``."""
+        """Return the terminal observation produced after an action.
+
+        Args:
+            action: Action that completed the episode.
+
+        Returns:
+            The terminal observation.
+        """
         raise NotImplementedError
 
 
@@ -147,6 +232,11 @@ class AsyncSingleTurnEnv(AsyncEnv[ObsT, ActT], ABC):
     """Async environment whose first action completes the episode."""
 
     def __init__(self) -> None:
+        """Initialize an inactive asynchronous single-turn environment.
+
+        Returns:
+            ``None``.
+        """
         self._episode_active = False
 
     async def reset(
@@ -155,6 +245,15 @@ class AsyncSingleTurnEnv(AsyncEnv[ObsT, ActT], ABC):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[ObsT, dict[str, Any]]:
+        """Reset the episode and return its initial observation and info.
+
+        Args:
+            seed: Optional seed used to initialize the environment RNG.
+            options: Optional application-defined reset options.
+
+        Returns:
+            The observation and info produced by ``initial_observation``.
+        """
         await super().reset(seed=seed, options=options)
         observation, info = await self.initial_observation(options=options)
         self._episode_active = True
@@ -163,6 +262,14 @@ class AsyncSingleTurnEnv(AsyncEnv[ObsT, ActT], ABC):
     async def step(
         self, action: ActT
     ) -> tuple[ObsT, float, bool, bool, dict[str, Any]]:
+        """Evaluate one action and complete the asynchronous episode.
+
+        Args:
+            action: Action accepted by ``action_space``.
+
+        Returns:
+            A terminal Gymnasium five-tuple containing the evaluated reward.
+        """
         self._require_active_episode()
         reward, info = _resolve_evaluation(await self.evaluate(action))
         observation = await self.terminal_observation(action)
@@ -170,6 +277,11 @@ class AsyncSingleTurnEnv(AsyncEnv[ObsT, ActT], ABC):
         return observation, reward, True, False, info
 
     def _require_active_episode(self) -> None:
+        """Raise ``RuntimeError`` unless an episode is currently active.
+
+        Returns:
+            ``None``.
+        """
         if not self._episode_active:
             raise RuntimeError(
                 "reset() must be called before step() and after an episode ends"
@@ -179,15 +291,36 @@ class AsyncSingleTurnEnv(AsyncEnv[ObsT, ActT], ABC):
     async def initial_observation(
         self, *, options: dict[str, Any] | None = None
     ) -> tuple[ObsT, dict[str, Any]]:
-        """Return the observation and info presented by ``reset``."""
+        """Return the observation and info presented by ``reset``.
+
+        Args:
+            options: Optional application-defined reset options.
+
+        Returns:
+            The initial observation and its info dictionary.
+        """
         raise NotImplementedError
 
     @abstractmethod
     async def evaluate(self, action: ActT) -> EvaluationResult:
-        """Grade the action and return a score, optionally with extra info."""
+        """Grade an action and return its score, optionally with extra info.
+
+        Args:
+            action: Action to evaluate.
+
+        Returns:
+            A scalar or structured score, optionally paired with step info.
+        """
         raise NotImplementedError
 
     @abstractmethod
     async def terminal_observation(self, action: ActT) -> ObsT:
-        """Return the terminal observation produced after ``action``."""
+        """Return the terminal observation produced after an action.
+
+        Args:
+            action: Action that completed the episode.
+
+        Returns:
+            The terminal observation.
+        """
         raise NotImplementedError

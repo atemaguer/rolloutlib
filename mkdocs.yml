@@ -43,6 +43,8 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
+  - Integrations:
+      - FinRL trading agents: integrations/finrl.md
   - Concepts:
       - Environments: concepts/environments.md
       - Spaces: concepts/spaces.md

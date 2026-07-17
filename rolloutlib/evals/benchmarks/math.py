@@ -35,12 +35,28 @@ _ANSWER_MARKER = re.compile(r"(?:answer is|answer:)\s*\$?([0-9,.-]+)", re.IGNORE
 
 
 def _clean_answer(value: str) -> str:
+    """Normalize punctuation and currency markers in an answer string.
+
+    Args:
+        value: Raw answer text.
+
+    Returns:
+        Trimmed answer text with common formatting removed.
+    """
     value = value.strip().replace("$", "").replace(",", "")
     value = value.replace("\\,", "")
     return value.strip().rstrip(".!?;:")
 
 
 def _canonical_answer(value: str) -> str:
+    """Convert numeric answers to a stable comparable representation.
+
+    Args:
+        value: Answer text to canonicalize.
+
+    Returns:
+        Canonical decimal text, or normalized case-folded text for non-numbers.
+    """
     value = _clean_answer(value)
     try:
         number = Decimal(value)
@@ -86,6 +102,16 @@ def _extract_number(value: str) -> str:
 
 
 def _grade_answer(response: str, expected: str, extracted: str | None) -> Score:
+    """Build a correctness score from an extracted and expected answer.
+
+    Args:
+        response: Complete model response (retained for API clarity).
+        expected: Reference answer text.
+        extracted: Answer extracted from the model response.
+
+    Returns:
+        Score containing a binary correctness value and answer metadata.
+    """
     correct = float(
         extracted is not None
         and _canonical_answer(extracted) == _canonical_answer(expected)
@@ -98,7 +124,14 @@ def _grade_answer(response: str, expected: str, extracted: str | None) -> Score:
 
 
 def extract_gsm8k_answer(response: str) -> str | None:
-    """Extract a final numeric answer from a GSM8K-style response."""
+    """Extract a final numeric answer from a GSM8K-style response.
+
+    Args:
+        response: Model response containing a worked solution.
+
+    Returns:
+        Extracted numeric answer, or ``None`` when no number is present.
+    """
 
     boxed = _extract_boxed(response)
     if boxed:
@@ -117,7 +150,14 @@ def extract_gsm8k_answer(response: str) -> str | None:
 
 
 def extract_aime_answer(response: str) -> str | None:
-    """Extract the final 0--999 integer from an AIME-style response."""
+    """Extract the final 0--999 integer from an AIME-style response.
+
+    Args:
+        response: Model response containing an AIME solution.
+
+    Returns:
+        Extracted answer text, or ``None`` when extraction fails.
+    """
 
     boxed = _extract_boxed(response)
     if boxed:
@@ -126,14 +166,30 @@ def extract_aime_answer(response: str) -> str | None:
 
 
 def grade_gsm8k(response: str, expected: str) -> Score:
-    """Grade a response against a GSM8K answer field."""
+    """Grade a response against a GSM8K answer field.
+
+    Args:
+        response: Model-generated response.
+        expected: Dataset answer field, possibly including a worked solution.
+
+    Returns:
+        Correctness score with expected and extracted answer metadata.
+    """
 
     expected_answer = extract_gsm8k_answer(expected) or expected
     return _grade_answer(response, expected_answer, extract_gsm8k_answer(response))
 
 
 def grade_aime(response: str, expected: str) -> Score:
-    """Grade a response against an AIME integer answer."""
+    """Grade a response against an AIME integer answer.
+
+    Args:
+        response: Model-generated response.
+        expected: Reference AIME answer.
+
+    Returns:
+        Binary correctness score with answer metadata.
+    """
 
     expected_answer = extract_aime_answer(expected) or expected
     return _grade_answer(response, expected_answer, extract_aime_answer(response))
@@ -151,7 +207,15 @@ class MathExample(BaseModel):
 
 
 def make_example_id(prefix: str, question: str) -> str:
-    """Create a stable content-derived example identifier."""
+    """Create a stable content-derived example identifier.
+
+    Args:
+        prefix: Benchmark name used as the identifier namespace.
+        question: Problem text used to derive the content hash.
+
+    Returns:
+        Identifier combining ``prefix`` and a truncated SHA-256 digest.
+    """
 
     digest = hashlib.sha256(question.strip().encode("utf-8")).hexdigest()[:16]
     return f"{prefix}:{digest}"
@@ -164,6 +228,17 @@ def _coerce_example(
     answer_keys: tuple[str, ...],
     prefix: str,
 ) -> MathExample:
+    """Normalize a benchmark row into a validated math example.
+
+    Args:
+        value: Existing example or mapping containing question and answer data.
+        question_keys: Candidate mapping keys for the problem text.
+        answer_keys: Candidate mapping keys for the reference answer.
+        prefix: Benchmark prefix used for generated identifiers.
+
+    Returns:
+        Validated ``MathExample`` with a stable identifier.
+    """
     if isinstance(value, MathExample):
         if value.example_id is not None:
             return value
@@ -207,6 +282,16 @@ def _load_huggingface(
     config: str | None,
     split: str,
 ) -> Iterable[Mapping[str, Any]]:
+    """Load a benchmark split from the optional Hugging Face dependency.
+
+    Args:
+        dataset: Hugging Face dataset name.
+        config: Optional dataset configuration name.
+        split: Dataset split to load.
+
+    Returns:
+        Iterable of dataset rows represented as mappings.
+    """
     try:
         load_dataset = importlib.import_module("datasets").load_dataset
     except ImportError as exc:
@@ -233,6 +318,17 @@ class MathEnv(SingleTurnEnv[Chat, str]):
         system_prompt: str | None = None,
         prompt_suffix: str = "",
     ) -> None:
+        """Initialize a single-turn math environment.
+
+        Args:
+            example: Problem and reference answer presented by the environment.
+            grade: Callable that scores a response against the reference answer.
+            system_prompt: Optional system message prepended to the prompt.
+            prompt_suffix: Text appended to the user question.
+
+        Returns:
+            ``None``.
+        """
         super().__init__()
         self.example = example
         self._grade = grade
@@ -244,6 +340,14 @@ class MathEnv(SingleTurnEnv[Chat, str]):
     def initial_observation(
         self, *, options: dict[str, Any] | None = None
     ) -> tuple[Chat, dict[str, Any]]:
+        """Return the initial system/user chat for the problem.
+
+        Args:
+            options: Optional reset options; ignored by this environment.
+
+        Returns:
+            Chat observation and metadata containing the example identifier.
+        """
         del options
         messages: Chat = []
         if self.system_prompt:
@@ -254,10 +358,26 @@ class MathEnv(SingleTurnEnv[Chat, str]):
         return messages, {"example_id": self.example.example_id}
 
     def evaluate(self, action: str) -> tuple[Score, dict[str, Any]]:
+        """Grade the submitted answer for this problem.
+
+        Args:
+            action: Model-generated answer text.
+
+        Returns:
+            Score and metadata containing the example identifier.
+        """
         score = self._grade(action, self.example.answer)
         return score, {"example_id": self.example.example_id}
 
     def terminal_observation(self, action: str) -> Chat:
+        """Return the terminal chat containing the submitted answer.
+
+        Args:
+            action: Model-generated answer text.
+
+        Returns:
+            Chat containing one assistant message.
+        """
         return [{"role": "assistant", "content": action}]
 
 
@@ -270,6 +390,15 @@ class GSM8KEnv(MathEnv):
         *,
         system_prompt: str | None = None,
     ) -> None:
+        """Initialize a single-turn GSM8K environment.
+
+        Args:
+            example: GSM8K problem and reference answer.
+            system_prompt: Optional system message prepended to the prompt.
+
+        Returns:
+            ``None``.
+        """
         super().__init__(example, grade_gsm8k, system_prompt=system_prompt)
 
 
@@ -283,6 +412,16 @@ class AIMEEnv(MathEnv):
         system_prompt: str | None = None,
         prompt_suffix: str = AIME_PROMPT_SUFFIX,
     ) -> None:
+        """Initialize a single-turn AIME environment.
+
+        Args:
+            example: AIME problem and reference answer.
+            system_prompt: Optional system message prepended to the prompt.
+            prompt_suffix: Instruction appended to the problem text.
+
+        Returns:
+            ``None``.
+        """
         super().__init__(
             example,
             grade_aime,
@@ -303,6 +442,16 @@ def gsm8k(
 
     Rows use the standard ``question`` and ``answer`` fields. The answer field
     may contain GSM8K's worked solution and ``####`` marker.
+
+    Args:
+        examples: Optional in-memory rows; otherwise load the dataset lazily.
+        split: Dataset split used when loading from Hugging Face.
+        dataset: Hugging Face dataset name.
+        config: Hugging Face dataset configuration name.
+        system_prompt: Optional system message used by each environment.
+
+    Returns:
+        Configured GSM8K benchmark.
     """
 
     rows = (
@@ -343,6 +492,16 @@ def aime(
     The default dataset has ``problem`` and ``answer`` fields and contains the
     30 AIME 2025 problems. Custom rows may use either ``problem`` or
     ``question`` for the prompt.
+
+    Args:
+        examples: Optional in-memory rows; otherwise load the dataset lazily.
+        split: Dataset split used when loading from Hugging Face.
+        dataset: Hugging Face dataset name.
+        system_prompt: Optional system message used by each environment.
+        prompt_suffix: Instruction appended to each problem.
+
+    Returns:
+        Configured AIME benchmark.
     """
 
     actual_split = split

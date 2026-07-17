@@ -78,6 +78,23 @@ The generated site is written to `site/`. Serve it locally with:
 uv run --group docs mkdocs serve
 ```
 
+## OpenAI chess integration
+
+The opt-in chess test wraps the external `BulletChess-v0` Gymnasium environment
+for a language agent. It runs 20 self-play steps with `gpt-5.6-luna` at
+reasoning effort `none`, sending each board image and structured state to the
+OpenAI Responses API and applying every selected legal move:
+
+```console
+uv sync --extra openai-chess
+export OPENAI_API_KEY=...
+RUN_OPENAI_CHESS_INTEGRATION=1 uv run pytest \
+  tests/test_openai_chess_integration.py -q
+```
+
+The default model can be changed with `OPENAI_CHESS_MODEL`. The test makes 20
+paid API requests and is skipped unless `RUN_OPENAI_CHESS_INTEGRATION=1`.
+
 ## Tinker integration
 
 The Tinker smoke and AIME parity tests are opt-in. Install the Tinker SDK,

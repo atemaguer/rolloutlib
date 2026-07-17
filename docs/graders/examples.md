@@ -354,7 +354,7 @@ complete example grades the terminal answer and retains the structured score in
 ```python
 import gymnasium as gym
 
-from rolloutlib import GradingWrapper
+from rolloutlib import wrappers
 from rolloutlib.graders import RewardGrader, Score
 
 
@@ -380,7 +380,7 @@ grader = RewardGrader(
     input_space=QuestionEnv.action_space,
 )
 
-environment = GradingWrapper(
+environment = wrappers.GradingWrapper(
     QuestionEnv(),
     grader=grader,
     make_input=lambda env, action: action,
@@ -403,7 +403,7 @@ The default wrapper replaces the inner reward. Supply `combine_reward` when the
 inner signal should remain:
 
 ```python
-environment = GradingWrapper(
+environment = wrappers.GradingWrapper(
     QuestionEnv(),
     grader=grader,
     make_input=lambda env, action: action,

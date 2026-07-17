@@ -34,7 +34,16 @@ def make(
     examples: Iterable[MathExample | Mapping[str, Any]] | None = None,
     **kwargs: Any,
 ) -> Benchmark[MathExample]:
-    """Construct a registered benchmark by name."""
+    """Construct a registered benchmark by name.
+
+    Args:
+        name: Registered benchmark name, such as ``"aime"`` or ``"gsm8k"``.
+        examples: Optional in-memory examples passed to the factory.
+        **kwargs: Additional benchmark-factory options.
+
+    Returns:
+        Configured benchmark instance.
+    """
 
     try:
         factory = REGISTRY[name]

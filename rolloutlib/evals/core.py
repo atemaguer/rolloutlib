@@ -39,7 +39,16 @@ class Evaluation:
 class EvaluationCallback(Protocol[EnvironmentT]):
     """User-owned evaluation of one fresh environment instance."""
 
-    def __call__(self, environment: EnvironmentT, /) -> Evaluation: ...
+    def __call__(self, environment: EnvironmentT, /) -> Evaluation:
+        """Evaluate one environment instance.
+
+        Args:
+            environment: Fresh environment created for one benchmark item.
+
+        Returns:
+            Evaluation produced by the user-owned policy and environment loop.
+        """
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +74,11 @@ class Benchmark(Generic[ItemT]):
     item_id: Callable[[ItemT], str] | None = None
 
     def __post_init__(self) -> None:
+        """Validate and normalize benchmark fields after initialization.
+
+        Returns:
+            ``None``. Raises ``ValueError`` for an empty benchmark name.
+        """
         if not self.name.strip():
             raise ValueError("benchmark name must be non-empty")
         object.__setattr__(self, "items", tuple(self.items))
@@ -90,6 +104,15 @@ class BenchmarkResult:
 
 
 def _limit_items(items: Iterable[ItemT], limit: int | None) -> list[ItemT]:
+    """Materialize benchmark items, optionally taking only a prefix.
+
+    Args:
+        items: Iterable containing benchmark items.
+        limit: Maximum number of items, or ``None`` for all items.
+
+    Returns:
+        A list containing at most ``limit`` items.
+    """
     if limit is not None and limit < 0:
         raise ValueError("limit must be non-negative")
     if limit is None:
@@ -98,24 +121,56 @@ def _limit_items(items: Iterable[ItemT], limit: int | None) -> list[ItemT]:
 
 
 def _as_evaluation(value: object) -> Evaluation:
+    """Validate the value returned by an evaluation callback.
+
+    Args:
+        value: Object returned by the callback.
+
+    Returns:
+        The value as an ``Evaluation`` instance.
+    """
     if isinstance(value, Evaluation):
         return value
     raise TypeError("evaluation callback must return Evaluation")
 
 
 def _is_async_callback(callback: object) -> bool:
+    """Determine whether a callback is coroutine-based.
+
+    Args:
+        callback: Callable or callable object to inspect.
+
+    Returns:
+        ``True`` when the callback or its ``__call__`` method is async.
+    """
     return inspect.iscoroutinefunction(callback) or inspect.iscoroutinefunction(
         getattr(callback, "__call__", None)
     )
 
 
 def _close_awaitable(value: object) -> None:
+    """Close an awaitable when it exposes a synchronous ``close`` method.
+
+    Args:
+        value: Awaitable object whose resources should be released.
+
+    Returns:
+        ``None``.
+    """
     close = getattr(value, "close", None)
     if callable(close):
         close()
 
 
 def _close_environment(environment: object) -> None:
+    """Close a synchronous benchmark environment and reject async cleanup.
+
+    Args:
+        environment: Environment object with an optional ``close`` method.
+
+    Returns:
+        ``None``. Raises ``TypeError`` when ``close`` returns an awaitable.
+    """
     close = getattr(environment, "close", None)
     if not callable(close):
         return
@@ -130,6 +185,16 @@ def _aggregate(
     records: list[EvaluationRecord],
     elapsed_seconds: float,
 ) -> BenchmarkResult:
+    """Aggregate per-item records into a benchmark result.
+
+    Args:
+        benchmark: Benchmark whose items were evaluated.
+        records: Per-item evaluation records.
+        elapsed_seconds: Wall-clock duration of the run.
+
+    Returns:
+        Aggregated scores, counts, component values, and records.
+    """
     num_examples = len(records)
     successful = [record for record in records if record.score is not None]
     completed = [record for record in successful if not record.truncated]
@@ -178,6 +243,15 @@ def run_benchmark(
 
     ``evaluate`` receives a fresh environment for each example and owns the
     policy/environment interaction. Rolloutlib never samples a model itself.
+
+    Args:
+        benchmark: Benchmark items and environment factory to evaluate.
+        evaluate: Synchronous callback that evaluates one fresh environment.
+        limit: Optional maximum number of benchmark items.
+        fail_fast: Whether to re-raise the first evaluation exception.
+
+    Returns:
+        Aggregated result for the selected benchmark items.
     """
 
     if _is_async_callback(evaluate):
@@ -227,7 +301,17 @@ def run_benchmarks(
     limit: int | None = None,
     fail_fast: bool = False,
 ) -> dict[str, BenchmarkResult]:
-    """Run multiple synchronous benchmarks sequentially by name."""
+    """Run multiple synchronous benchmarks sequentially by name.
+
+    Args:
+        benchmarks: Benchmarks to evaluate.
+        evaluate: Synchronous callback used for every benchmark item.
+        limit: Optional maximum number of items per benchmark.
+        fail_fast: Whether to re-raise the first evaluation exception.
+
+    Returns:
+        Mapping from unique benchmark names to aggregated results.
+    """
 
     results: dict[str, BenchmarkResult] = {}
     for benchmark in benchmarks:

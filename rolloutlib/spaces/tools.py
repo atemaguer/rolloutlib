@@ -7,12 +7,12 @@ from typing import Any, cast
 
 import numpy as np
 from gymnasium import Space
-from gymnasium.spaces import Dict as DictSpace
 from gymnasium.spaces import Sequence as SequenceSpace
 
 from rolloutlib.types import ToolCall
 
 from ._pydantic import PydanticSpace
+from .json import from_json_value, to_json_value
 
 
 class ToolCallSpace(PydanticSpace[ToolCall]):
@@ -22,24 +22,52 @@ class ToolCallSpace(PydanticSpace[ToolCall]):
         self,
         tools: Mapping[str, Space[Any]],
         *,
+        descriptions: Mapping[str, str] | None = None,
         include_id_in_samples: bool = False,
         seed: int | None = None,
     ) -> None:
+        """Initialize a space for named structured tool calls.
+
+        Args:
+            tools: Mapping from tool names to argument spaces.
+            descriptions: Optional model-facing description for each tool.
+            include_id_in_samples: Whether sampled calls include generated IDs.
+            seed: Optional random seed.
+
+        Returns:
+            ``None``.
+        """
         if not tools:
             raise ValueError("at least one tool schema is required")
         if any(not isinstance(name, str) or not name for name in tools):
             raise ValueError("tool names must be non-empty strings")
         if any(not isinstance(space, Space) for space in tools.values()):
             raise TypeError("each tool schema must be a gymnasium Space")
+        if descriptions is not None and not set(descriptions).issubset(tools):
+            raise ValueError("descriptions contain unknown tool names")
         self.tools = dict(tools)
+        self.descriptions = dict(descriptions or {})
         self.include_id_in_samples = include_id_in_samples
         super().__init__(ToolCall, sampler=self._sample_call, seed=seed)
 
     @property
     def tool_schemas(self) -> Mapping[str, Space[Any]]:
+        """Return the configured tool-name to argument-space mapping.
+
+        Returns:
+            Read-only view of the tool schemas.
+        """
         return self.tools
 
     def _sample_call(self, rng: np.random.Generator) -> ToolCall:
+        """Sample a tool name and arguments from its schema.
+
+        Args:
+            rng: NumPy random generator supplied by the space.
+
+        Returns:
+            Sampled structured tool call.
+        """
         names = tuple(self.tools)
         name = names[int(rng.integers(0, len(names)))]
         value: ToolCall = {
@@ -51,6 +79,14 @@ class ToolCallSpace(PydanticSpace[ToolCall]):
         return value
 
     def contains(self, x: object) -> bool:
+        """Check tool-name and argument-space membership.
+
+        Args:
+            x: Candidate tool call.
+
+        Returns:
+            ``True`` when the call names a known tool with valid arguments.
+        """
         if not super().contains(x):
             return False
         assert isinstance(x, dict)
@@ -58,6 +94,14 @@ class ToolCallSpace(PydanticSpace[ToolCall]):
         return name in self.tools and x["arguments"] in self.tools[name]
 
     def seed(self, seed: int | None = None) -> list[int]:
+        """Seed this space and every tool argument space.
+
+        Args:
+            seed: Optional seed for this space.
+
+        Returns:
+            The parent seed followed by one seed per tool schema.
+        """
         own_seed = cast(int, super().seed(seed))
         child_seeds: list[int] = []
         for space in self.tools.values():
@@ -68,23 +112,25 @@ class ToolCallSpace(PydanticSpace[ToolCall]):
         return [own_seed, *child_seeds]
 
     def to_jsonable(self, sample_n: Sequence[ToolCall]) -> list[dict[str, Any]]:
+        """Serialize tool calls using each tool's argument space.
+
+        Args:
+            sample_n: Tool calls to serialize.
+
+        Returns:
+            JSON-compatible tool call mappings.
+        """
         result: list[dict[str, Any]] = []
         for value in sample_n:
             validated = self.validate(value)
             name = validated["name"]
             if name not in self.tools:
                 raise ValueError(f"unknown tool {name!r}")
-            encoded_batch = self.tools[name].to_jsonable([validated["arguments"]])
-            # Gym's Dict space represents a batch as a mapping of batches;
-            # scalar/custom spaces generally represent it as a sequence.
-            encoded_arguments = (
-                encoded_batch
-                if isinstance(self.tools[name], DictSpace)
-                else encoded_batch[0]
-            )
             item: dict[str, Any] = {
                 "name": name,
-                "arguments": encoded_arguments,
+                "arguments": to_json_value(
+                    self.tools[name], validated["arguments"]
+                ),
             }
             if "id" in validated:
                 item["id"] = validated["id"]
@@ -92,20 +138,25 @@ class ToolCallSpace(PydanticSpace[ToolCall]):
         return result
 
     def from_jsonable(self, sample_n: Sequence[Any]) -> list[ToolCall]:
+        """Deserialize and validate serialized tool calls.
+
+        Args:
+            sample_n: JSON-compatible tool call mappings.
+
+        Returns:
+            Validated tool calls with decoded arguments.
+        """
         result: list[ToolCall] = []
         for raw in sample_n:
             structural = self.validate(raw)
             name = structural["name"]
             if name not in self.tools:
                 raise ValueError(f"unknown tool {name!r}")
-            encoded_arguments = structural["arguments"]
             argument_space = self.tools[name]
-            if isinstance(argument_space, DictSpace):
-                arguments = argument_space.from_jsonable(
-                    cast(dict[str, list[Any]], encoded_arguments)
-                )[0]
-            else:
-                arguments = argument_space.from_jsonable([encoded_arguments])[0]
+            arguments = from_json_value(
+                argument_space,
+                cast(Any, structural["arguments"]),
+            )
             value: ToolCall = {"name": name, "arguments": arguments}
             if "id" in structural:
                 value["id"] = structural["id"]
@@ -115,17 +166,35 @@ class ToolCallSpace(PydanticSpace[ToolCall]):
         return result
 
     def __repr__(self) -> str:
+        """Return a concise representation of the tool-call space.
+
+        Returns:
+            Human-readable representation listing configured tool names.
+        """
         return f"ToolCallSpace(tools={tuple(self.tools)!r})"
 
 
 def call(
     schemas: Mapping[str, Space[Any]],
     *,
+    descriptions: Mapping[str, str] | None = None,
     include_id_in_samples: bool = False,
     seed: int | None = None,
 ) -> ToolCallSpace:
+    """Construct a space for one structured tool call.
+
+    Args:
+        schemas: Mapping from tool names to argument spaces.
+        descriptions: Optional model-facing description for each tool.
+        include_id_in_samples: Whether sampled calls include generated IDs.
+        seed: Optional random seed.
+
+    Returns:
+        Configured ``ToolCallSpace`` instance.
+    """
     return ToolCallSpace(
         schemas,
+        descriptions=descriptions,
         include_id_in_samples=include_id_in_samples,
         seed=seed,
     )
@@ -138,7 +207,17 @@ def calls(
     stack: bool = False,
     seed: int | None = None,
 ) -> SequenceSpace:
-    """Return a variable-length sequence of structured tool calls."""
+    """Construct a variable-length sequence of structured tool calls.
+
+    Args:
+        schemas: Mapping from tool names to argument spaces.
+        include_id_in_samples: Whether sampled calls include generated IDs.
+        stack: Whether sampled sequences should be stacked when possible.
+        seed: Optional random seed.
+
+    Returns:
+        Gymnasium ``Sequence`` space containing tool calls.
+    """
 
     return SequenceSpace(
         call(schemas, include_id_in_samples=include_id_in_samples),

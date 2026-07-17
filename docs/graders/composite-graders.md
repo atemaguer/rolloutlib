@@ -243,9 +243,9 @@ When a grade determines the environment reward, perform grading inside
 synchronous grader:
 
 ```python
-from rolloutlib import GradingWrapper
+from rolloutlib import wrappers
 
-environment = GradingWrapper(
+environment = wrappers.GradingWrapper(
     ExistingEnv(item),
     grader=grader,
     make_input=lambda env, action: EvaluationInput(
@@ -267,9 +267,9 @@ By default, the wrapper:
 `AsyncGradingWrapper` accepts either a sync or async grader:
 
 ```python
-from rolloutlib import AsyncGradingWrapper
+from rolloutlib import wrappers
 
-environment = AsyncGradingWrapper(
+environment = wrappers.AsyncGradingWrapper(
     ExistingAsyncEnv(item),
     grader=async_grader,
     make_input=lambda env, action: EvaluationInput(
@@ -286,7 +286,7 @@ environment = AsyncGradingWrapper(
 The `when` callable receives `(terminated, truncated)`:
 
 ```python
-environment = GradingWrapper(
+environment = wrappers.GradingWrapper(
     ExistingEnv(item),
     grader=grader,
     make_input=make_input,
@@ -303,7 +303,7 @@ The default replaces the inner reward. `combine_reward` receives the existing
 scalar and complete `Score`:
 
 ```python
-environment = GradingWrapper(
+environment = wrappers.GradingWrapper(
     ExistingEnv(item),
     grader=grader,
     make_input=make_input,

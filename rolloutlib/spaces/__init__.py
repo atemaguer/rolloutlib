@@ -1,6 +1,7 @@
 """Role-neutral Gymnasium spaces for language-agent values."""
 
-from . import messages, text, tokens, tools
+from . import json, messages, text, tokens, tools
+from .json import from_json_value, to_json_schema, to_json_value
 from ._pydantic import PydanticSpace
 from .messages import ChatSpace, MessageSpace
 from .text import TextSpace
@@ -24,7 +25,11 @@ __all__ = [
     "ToolCall",
     "ToolCallSpace",
     "messages",
+    "json",
+    "from_json_value",
     "text",
+    "to_json_schema",
+    "to_json_value",
     "tokens",
     "tools",
 ]

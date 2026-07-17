@@ -5,14 +5,28 @@ from typing import Any
 
 import gymnasium as gym
 
-from rolloutlib import spaces
+import rolloutlib
+import rolloutlib.envs.language as legacy_language_wrappers
+import rolloutlib.envs.wrappers as legacy_async_wrappers
+from rolloutlib import spaces, wrappers
 from rolloutlib.envs import AsyncEnv
 from rolloutlib.types import Chat, ToolCall
-from rolloutlib.envs.wrappers import (
+from rolloutlib.wrappers import (
     AsyncActionWrapper,
     AsyncObservationWrapper,
     AsyncRewardWrapper,
 )
+
+
+def test_wrappers_namespace_is_canonical_and_legacy_exports_remain_compatible() -> None:
+    assert rolloutlib.ChatObservationWrapper is wrappers.ChatObservationWrapper
+    assert rolloutlib.GradingWrapper is wrappers.GradingWrapper
+    assert legacy_language_wrappers.ChatObservationWrapper is (
+        wrappers.ChatObservationWrapper
+    )
+    assert legacy_async_wrappers.AsyncWrapper is wrappers.AsyncWrapper
+    assert rolloutlib.envs.ToolCallActionWrapper is wrappers.ToolCallActionWrapper
+    assert rolloutlib.envs.AsyncGradingWrapper is wrappers.AsyncGradingWrapper
 
 
 class ToolEnv(AsyncEnv[Chat, ToolCall]):
