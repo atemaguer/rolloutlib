@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+  <meta
+    name="rolloutlib-docs-revision"
+    content="__ROLLOUTLIB_DOCS_REVISION__"
+  >
+{% endblock %}

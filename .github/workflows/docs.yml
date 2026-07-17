@@ -31,6 +31,29 @@ jobs:
       - name: Build documentation
         run: uv run mkdocs build --strict
 
+      - name: Stamp documentation revision
+        env:
+          DOCS_REVISION: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          revision = os.environ["DOCS_REVISION"]
+          placeholder = "__ROLLOUTLIB_DOCS_REVISION__"
+          site = Path("site")
+
+          pages = tuple(site.rglob("*.html"))
+          for page in pages:
+              content = page.read_text()
+              page.write_text(content.replace(placeholder, revision))
+
+          (site / "revision.json").write_text(
+              json.dumps({"revision": revision}) + "\n"
+          )
+          PY
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:

@@ -6,6 +6,7 @@ repo_name: atemaguer/rolloutlib
 
 theme:
   name: material
+  custom_dir: overrides
   features:
     - navigation.sections
     - navigation.expand
@@ -13,6 +14,9 @@ theme:
     - search.suggest
     - search.highlight
   font: false
+
+extra_javascript:
+  - javascripts/version-check.js
 
 plugins:
   - search
