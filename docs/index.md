@@ -1,19 +1,43 @@
 # rolloutlib
 
-Gymnasium-style environments and rollout primitives for agentic RL
-post-training.
+Rolloutlib defines small, composable interfaces for agentic and language-model
+reinforcement-learning post-training.
 
-Rolloutlib provides small, composable contracts for environments, spaces,
-policies, rollouts, datasets, graders, and evaluation. It does not own model
-sampling or a training loop; those remain user- or backend-specific.
+The library standardizes the boundaries between a task, a policy, a recorded
+interaction, and a grading signal. It deliberately leaves model sampling,
+optimization algorithms, distributed execution, and backend-specific training
+records to the systems that own them.
 
-## What belongs in rolloutlib
+## The interaction model
 
-- Gymnasium-compatible synchronous environments and async counterparts.
-- Token, text, message, chat, and tool-call spaces.
-- Sync and async policy contracts and trajectory collection.
-- RL datasets, grouped rollouts, structured scores, rubrics, and graders.
-- Model-backend-neutral benchmark evaluation.
+An environment presents an observation and accepts an action. A policy samples
+the action. A rollout records the interaction. A grader validates its declared
+input and turns an action, trajectory, tool trace, or other application value
+into a structured score.
 
-Start with [Getting started](getting-started.md), then explore the
-[core concepts](concepts.md) and [API reference](api.md).
+```text
+dataset item
+    → fresh environment
+    → policy actions
+    → trajectory
+    → score
+    → training backend
+```
+
+These pieces stay independent. The same environment can be used for evaluation
+or training; the same grader can grade a single response or a collected
+trajectory; the same trajectory can be adapted to different optimizers.
+
+## Concepts
+
+- [Environments](concepts/environments.md) define tasks and state transitions.
+- [Spaces](concepts/spaces.md) describe valid observations, actions, and grader
+  inputs.
+- [Policies and rollouts](concepts/rollouts.md) sample and record interactions.
+- [Graders and rubrics](concepts/graders.md) define portable grading signals.
+- [Datasets and evaluation](concepts/datasets-and-evaluation.md) organize work
+  and benchmark task behavior.
+
+Start with [Getting started](getting-started.md) for installation and a small
+end-to-end example. Use the [API reference](api.md) when implementing against a
+specific interface.

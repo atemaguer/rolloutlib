@@ -18,6 +18,38 @@ cd rolloutlib
 uv sync
 ```
 
+## A minimal rollout
+
+An environment owns task state and reward semantics. A policy owns model
+sampling. The rollout function connects them and records the episode:
+
+```python
+import gymnasium as gym
+
+from rolloutlib import Env, rollout
+
+
+class AnswerEnv(Env):
+    action_space = gym.spaces.Text(min_length=1, max_length=100)
+    observation_space = gym.spaces.Text(min_length=1, max_length=100)
+
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+        return "What is 6 × 7?", {}
+
+    def step(self, action):
+        correct = action.strip() == "42"
+        return "done", float(correct), True, False, {}
+
+
+trajectory = rollout(AnswerEnv(), lambda observation: "42")
+assert trajectory.total_reward == 1.0
+```
+
+The policy can instead return `PolicyOutput` to retain tokens, log
+probabilities, and sampling metadata. See [Policies and
+rollouts](concepts/rollouts.md).
+
 For the optional benchmark dataset loaders:
 
 ```console

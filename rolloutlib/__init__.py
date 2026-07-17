@@ -15,7 +15,7 @@ from .envs import (
     as_sync,
     check_async_env,
 )
-from .graders import Score
+from .graders import AsyncGrader, Criterion, Grader, Level, Rubric, Score
 from .rollouts import (
     AsyncPolicy,
     Policy,
@@ -35,15 +35,20 @@ __version__ = version("rolloutlib")
 __all__ = [
     "AsyncEnv",
     "AsyncGradingWrapper",
+    "AsyncGrader",
     "AsyncPolicy",
     "AsyncSingleTurnEnv",
     "Dataset",
+    "Criterion",
     "Env",
     "GradingWrapper",
+    "Grader",
+    "Level",
     "Policy",
     "PolicyOutput",
     "RLDataset",
     "RolloutError",
+    "Rubric",
     "Score",
     "SingleTurnEnv",
     "Step",

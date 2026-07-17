@@ -21,7 +21,13 @@ from rolloutlib.envs import (
     as_sync,
     check_async_env,
 )
-from rolloutlib.graders import Criterion, Rubric, Score
+from rolloutlib.graders import (
+    AsyncCallableGrader,
+    Criterion,
+    CallableGrader,
+    Rubric,
+    Score,
+)
 
 
 class EchoEnv(gym.Env[str, int]):
@@ -372,9 +378,12 @@ def test_sync_grading_wrapper_grades_inside_step() -> None:
     env = GradingWrapper(
         EchoEnv(),
         rubric=rubric,
-        grader=lambda action, _: Score(
-            float(action == 3),
-            {"correct": float(action == 3)},
+        grader=CallableGrader(
+            lambda action, _: Score(
+                float(action == 3),
+                {"correct": float(action == 3)},
+            ),
+            input_space=gym.spaces.Discrete(10),
         ),
         make_input=lambda environment, action: action,
     )
@@ -392,7 +401,7 @@ def test_sync_grading_wrapper_grades_inside_step() -> None:
 
 def test_async_grading_wrapper_awaits_grading_inside_step() -> None:
     async def run() -> None:
-        async def grade(action: int, rubric: Rubric) -> Score:
+        async def grade(action: int, rubric: Rubric | None) -> Score:
             await asyncio.sleep(0)
             return Score(float(action == 3), {"correct": float(action == 3)})
 
@@ -402,7 +411,10 @@ def test_async_grading_wrapper_awaits_grading_inside_step() -> None:
         env = AsyncGradingWrapper(
             CountingAsyncEnv(),
             rubric=rubric,
-            grader=grade,
+            grader=AsyncCallableGrader(
+                grade,
+                input_space=gym.spaces.Discrete(10),
+            ),
             make_input=lambda environment, action: action,
         )
         await env.reset(options={"value": 2})

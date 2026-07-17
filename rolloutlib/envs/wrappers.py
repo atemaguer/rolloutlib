@@ -10,7 +10,8 @@ from typing import Any, Generic, TypeVar, cast
 import gymnasium as gym
 from gymnasium.spaces import Space
 
-from ..graders import Grader, Rubric, Score
+from ..graders import AsyncGrader, Grader, Rubric, Score
+from ..graders.core import _with_rubric_metadata
 from .core import AsyncEnv
 
 
@@ -19,7 +20,6 @@ ActT = TypeVar("ActT")
 WrapperObsT = TypeVar("WrapperObsT")
 WrapperActT = TypeVar("WrapperActT")
 InputT = TypeVar("InputT")
-RubricT = TypeVar("RubricT")
 
 
 def _terminal(terminated: bool, truncated: bool) -> bool:
@@ -31,26 +31,9 @@ def _replace_reward(reward: float, score: Score) -> float:
     return score.value
 
 
-def _with_rubric_metadata(score: Score, rubric: object) -> Score:
-    if not isinstance(rubric, Rubric):
-        return score
-    metadata = dict(score.metadata)
-    metadata.setdefault("rubric_fingerprint", rubric.fingerprint)
-    if rubric.id is not None:
-        metadata.setdefault("rubric_id", rubric.id)
-    if metadata == score.metadata:
-        return score
-    return Score(
-        score.value,
-        score.components,
-        metadata,
-        feedback=score.feedback,
-    )
-
-
 class GradingWrapper(
     gym.Wrapper[ObsT, ActT, ObsT, ActT],
-    Generic[ObsT, ActT, InputT, RubricT],
+    Generic[ObsT, ActT, InputT],
 ):
     """Grade environment state inside synchronous ``step`` calls.
 
@@ -63,8 +46,8 @@ class GradingWrapper(
         self,
         env: gym.Env[ObsT, ActT],
         *,
-        rubric: RubricT,
-        grader: Grader[InputT, RubricT],
+        rubric: Rubric | None = None,
+        grader: Grader[InputT],
         make_input: Callable[[gym.Env[ObsT, ActT], ActT], InputT],
         when: Callable[[bool, bool], bool] = _terminal,
         combine_reward: Callable[[float, Score], float] = _replace_reward,
@@ -81,16 +64,13 @@ class GradingWrapper(
         scalar_reward = float(reward)
         if not self.when(terminated, truncated):
             return observation, scalar_reward, terminated, truncated, info
-        value = self.grader(self.make_input(self.env, action), self.rubric)
-        if inspect.isawaitable(value):
-            close = getattr(value, "close", None)
-            if callable(close):
-                close()
-            raise TypeError(
-                "synchronous grading wrapper received an awaitable; "
-                "use AsyncGradingWrapper"
-            )
-        score = _with_rubric_metadata(Score.from_value(value), self.rubric)
+        score = _with_rubric_metadata(
+            self.grader.grade(
+                self.make_input(self.env, action),
+                rubric=self.rubric,
+            ),
+            self.rubric,
+        )
         resolved_info = dict(info)
         resolved_info.update(score.as_info())
         return (
@@ -219,7 +199,7 @@ class AsyncRewardWrapper(AsyncWrapper[ObsT, ActT, ObsT, ActT], Generic[ObsT, Act
 
 class AsyncGradingWrapper(
     AsyncWrapper[ObsT, ActT, ObsT, ActT],
-    Generic[ObsT, ActT, InputT, RubricT],
+    Generic[ObsT, ActT, InputT],
 ):
     """Grade environment state inside asynchronous ``step`` calls."""
 
@@ -227,8 +207,8 @@ class AsyncGradingWrapper(
         self,
         env: AsyncEnv[ObsT, ActT],
         *,
-        rubric: RubricT,
-        grader: Grader[InputT, RubricT],
+        rubric: Rubric | None = None,
+        grader: Grader[InputT] | AsyncGrader[InputT],
         make_input: Callable[[AsyncEnv[ObsT, ActT], ActT], InputT],
         when: Callable[[bool, bool], bool] = _terminal,
         combine_reward: Callable[[float, Score], float] = _replace_reward,
@@ -247,10 +227,13 @@ class AsyncGradingWrapper(
         scalar_reward = float(reward)
         if not self.when(terminated, truncated):
             return observation, scalar_reward, terminated, truncated, info
-        value = self.grader(self.make_input(self.env, action), self.rubric)
+        value = self.grader.grade(
+            self.make_input(self.env, action),
+            rubric=self.rubric,
+        )
         if inspect.isawaitable(value):
             value = await value
-        score = _with_rubric_metadata(Score.from_value(value), self.rubric)
+        score = _with_rubric_metadata(value, self.rubric)
         resolved_info = dict(info)
         resolved_info.update(score.as_info())
         return (

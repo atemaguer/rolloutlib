@@ -1,11 +1,17 @@
-"""Rubric specifications and environment-independent graders."""
+"""Grading contracts, portable rubrics, and structured scores."""
 
 from .core import (
     Aggregator,
-    CompositeGrader,
+    AsyncCallableGrader,
+    AsyncGrader,
+    AsyncRubricGrader,
     Criterion,
+    CriterionScorer,
+    CallableGrader,
     Grader,
+    Level,
     Rubric,
+    RubricGrader,
     Score,
     ScoreValue,
     all_pass,
@@ -13,15 +19,22 @@ from .core import (
     weighted_mean,
     weighted_sum,
 )
-from .llm import LLMGrader
+from .llm import AsyncLLMGrader, LLMGrader
 
 __all__ = [
     "Aggregator",
-    "CompositeGrader",
+    "AsyncCallableGrader",
+    "AsyncGrader",
+    "AsyncLLMGrader",
+    "AsyncRubricGrader",
     "Criterion",
+    "CriterionScorer",
+    "CallableGrader",
     "Grader",
     "LLMGrader",
+    "Level",
     "Rubric",
+    "RubricGrader",
     "Score",
     "ScoreValue",
     "all_pass",

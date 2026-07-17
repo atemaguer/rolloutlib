@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
+import gymnasium as gym
 
-from rolloutlib.graders import Criterion, LLMGrader, Rubric, Score
+from rolloutlib.graders import (
+    AsyncLLMGrader,
+    Criterion,
+    LLMGrader,
+    Rubric,
+    Score,
+)
 from rolloutlib.types import Chat
 
 
@@ -15,7 +21,8 @@ def rubric() -> Rubric:
     )
 
 
-def render(answer: str, value: Rubric) -> Chat:
+def render(answer: str, value: Rubric | None) -> Chat:
+    assert value is not None
     return [
         {
             "role": "user",
@@ -24,20 +31,21 @@ def render(answer: str, value: Rubric) -> Chat:
     ]
 
 
-def parse(response: str, value: Rubric) -> Score:
+def parse(response: str, value: Rubric | None) -> Score:
     del value
     return Score(float(response), feedback="Parsed judge score.")
 
 
 def test_llm_grader_adapts_a_synchronous_sampler() -> None:
-    grader = LLMGrader[str, Rubric](
+    grader = LLMGrader[str](
+        input_space=gym.spaces.Text(max_length=100),
         sample=lambda messages: "1" if "42" in messages[0]["content"] else "0",
         render=render,
         parse=parse,
         metadata={"model": "test-judge"},
     )
 
-    score = grader.score("42", rubric())
+    score = grader.grade("42", rubric=rubric())
 
     assert score.value == 1.0
     assert score.feedback == "Parsed judge score."
@@ -45,16 +53,19 @@ def test_llm_grader_adapts_a_synchronous_sampler() -> None:
     assert score.metadata["rubric_id"] == "correctness"
 
 
-def test_llm_grader_adapts_an_asynchronous_sampler() -> None:
+def test_async_llm_grader_adapts_an_asynchronous_sampler() -> None:
     async def run() -> None:
         async def sample(messages: Chat) -> str:
             await asyncio.sleep(0)
             return "1"
 
-        grader = LLMGrader[str, Rubric](sample=sample, render=render, parse=parse)
+        grader = AsyncLLMGrader[str](
+            input_space=gym.spaces.Text(max_length=100),
+            sample=sample,
+            render=render,
+            parse=parse,
+        )
 
-        with pytest.raises(TypeError, match="use ascore"):
-            grader.score("42", rubric())
-        assert (await grader.ascore("42", rubric())).value == 1.0
+        assert (await grader.grade("42", rubric=rubric())).value == 1.0
 
     asyncio.run(run())

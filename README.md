@@ -182,43 +182,75 @@ streaming dataset without inheriting from these convenience containers.
 ## Graders
 
 Rubrics describe what should be evaluated; graders implement how to evaluate
-it. Both are independent from environment action and observation spaces, so a
-grader can score an action, trajectory, group, tool result, or arbitrary
-application context.
+it. Every grader has an `input_space` describing the complete value it accepts,
+so a grader can safely score an action, trajectory, group, tool result, or
+arbitrary application context. The space may be shared with an environment
+space when the values are the same.
 
 ```python
-from rolloutlib.graders import CompositeGrader, Criterion, Rubric, Score
+from rolloutlib import spaces
+from rolloutlib.graders import Criterion, Level, Rubric, RubricGrader, Score
 
 rubric = Rubric(
+    id="answer-quality",
+    version="1",
     criteria=(
         Criterion(
             id="correctness",
             description="The answer is correct.",
-            weight=1.0,
+            weight=4.0,
+            levels=(
+                Level(
+                    id="correct",
+                    description="The answer and reasoning are correct.",
+                    score=1.0,
+                ),
+                Level(
+                    id="partial",
+                    description="The answer is correct with incomplete reasoning.",
+                    score=0.5,
+                ),
+                Level(
+                    id="incorrect",
+                    description="The answer is incorrect.",
+                    score=0.0,
+                ),
+            ),
         ),
         Criterion(
             id="format",
             description="The requested format is followed.",
-            weight=0.2,
+            weight=1.0,
         ),
     ),
     instructions="Grade only the submitted answer.",
 )
 
-grader = CompositeGrader(
+grader = RubricGrader(
     llm_criterion_grader,
+    input_space=spaces.text.text(min_length=1),
     overrides={"correctness": exact_answer_grader},
 )
 
-score = grader.score(context, rubric)
-score = await grader.ascore(context, rubric)
+score = grader.grade(answer, rubric=rubric)
 reward = score.value
 ```
 
-Each criterion grader receives `(input, criterion)` and may return a number or
-a `Score`. `CompositeGrader` executes independent criteria concurrently in its
-async path and combines them with a weighted mean by default. `weighted_sum`,
-`all_pass`, `asymmetric_mean`, and custom aggregation functions are supported.
+`Grader.grade(input, *, rubric=None)` is the standard synchronous contract and
+always returns a `Score`. `AsyncGrader` exposes the same value-level contract
+asynchronously. Before evaluation, both require the input to belong to the
+grader's `input_space`. Rubrics can vary per input or be fixed with
+`grader.bind(rubric)`, which preserves the same input space.
+
+Rubrics and criteria are strict Pydantic models designed to round-trip through
+JSON. Criteria remain flat and independently assessable. Optional `Level`
+objects describe classroom-style performance bands; criterion weights and
+aggregation remain separate concerns.
+
+`RubricGrader` evaluates each criterion independently and combines the
+component scores with a weighted mean by default. `AsyncRubricGrader` evaluates
+independent criteria concurrently. `weighted_sum`, `all_pass`,
+`asymmetric_mean`, and custom aggregation functions are also available.
 
 `Score` is recursive: its named components are themselves scores and may carry
 feedback and metadata. Environments use the scalar value as reward while
@@ -236,9 +268,27 @@ info.update(score.as_info())
 assert Score.from_info(info) == score
 ```
 
-`LLMGrader(sample=..., render=..., parse=...)` supplies a backend-neutral model
-boundary. The sampling callable may wrap Tinker, a hosted model API, or local
-inference and may be synchronous or asynchronous.
+An LLM-mediated grader uses the same callable adapter as any other grader:
+
+```python
+from rolloutlib.graders import AsyncCallableGrader
+
+
+async def grade_with_judge(answer, rubric):
+    request = render_judge_request(answer, rubric)
+    response = await call_judge_model(request)  # user-owned model interaction
+    return parse_judge_response(response)
+
+
+grader = AsyncCallableGrader(
+    grade_with_judge,
+    input_space=spaces.text.text(min_length=1),
+)
+```
+
+This keeps model selection, provider SDKs, prompts, sampling settings, retries,
+caching, and tracing on the application side. The grader contract remains the
+same for deterministic, model-mediated, and hybrid grading.
 
 ## Evaluation
 

@@ -1,9 +1,4 @@
-"""Rubric specifications, graders, and score results.
-
-A rubric describes what should be evaluated. A grader applies that rubric to
-an application-defined input and returns a score. Environments use the scalar
-score value as reward and preserve the complete score in step ``info``.
-"""
+"""Core grading contracts, rubric schemas, and score values."""
 
 from __future__ import annotations
 
@@ -12,37 +7,98 @@ import hashlib
 import inspect
 import json
 import math
+from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Generic, Protocol, Self, TypeAlias, TypeVar, cast, overload
+from typing import (
+    Any,
+    Generic,
+    Literal,
+    Self,
+    TypeAlias,
+    TypeVar,
+    cast,
+    final,
+    overload,
+)
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from gymnasium.spaces import Space
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    field_validator,
+    model_validator,
+)
 
 
 InputT = TypeVar("InputT", contravariant=True)
-RubricT = TypeVar("RubricT", contravariant=True)
-CompositeInputT = TypeVar("CompositeInputT")
+CallableInputT = TypeVar("CallableInputT")
+RubricInputT = TypeVar("RubricInputT")
 
 
-class Criterion(BaseModel):
-    """One independently identifiable requirement in a rubric."""
+def _strip_required(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError("must not be empty")
+    return value
+
+
+def _strip_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return _strip_required(value)
+
+
+class Level(BaseModel):
+    """A named performance level available for one rubric criterion.
+
+    Scores are normalized within a criterion. Criterion weights express the
+    relative importance of the criterion when a grader explicitly aggregates
+    component scores.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
     description: str
-    weight: float = Field(default=1.0, ge=0.0)
-    kind: str = "required"
-    references: tuple[str, ...] = ()
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    score: float = Field(ge=0.0, le=1.0)
+    label: str | None = None
 
-    @field_validator("id", "description", "kind")
+    _normalize_required = field_validator("id", "description")(_strip_required)
+    _normalize_optional = field_validator("label")(_strip_optional)
+
+    @field_validator("score")
     @classmethod
-    def _non_empty_text(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("must not be empty")
+    def _finite_score(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("level score must be finite")
         return value
+
+
+class Criterion(BaseModel):
+    """One independently assessable requirement in a rubric.
+
+    ``levels`` optionally define discrete classroom-style performance bands.
+    An empty level collection leaves the criterion open to continuous scoring.
+    Criteria are intentionally flat: grouping belongs in ``category`` or
+    ``metadata`` while each criterion remains independently gradeable.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    description: str
+    weight: float = Field(default=1.0, gt=0.0)
+    title: str | None = None
+    levels: tuple[Level, ...] = ()
+    category: str | None = None
+    references: tuple[str, ...] = ()
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+    _normalize_required = field_validator("id", "description")(_strip_required)
+    _normalize_optional = field_validator("title", "category")(_strip_optional)
 
     @field_validator("references")
     @classmethod
@@ -59,26 +115,46 @@ class Criterion(BaseModel):
             raise ValueError("criterion weight must be finite")
         return value
 
+    @model_validator(mode="after")
+    def _unique_levels(self) -> Self:
+        ids = [level.id for level in self.levels]
+        if len(ids) != len(set(ids)):
+            raise ValueError("level ids must be unique within a criterion")
+        scores = [level.score for level in self.levels]
+        if len(scores) != len(set(scores)):
+            raise ValueError("level scores must be unique within a criterion")
+        return self
+
+    def level(self, level_id: str) -> Level:
+        """Return a performance level by identifier."""
+
+        for level in self.levels:
+            if level.id == level_id:
+                return level
+        raise KeyError(level_id)
+
 
 class Rubric(BaseModel):
-    """A declarative collection of criteria and grading instructions."""
+    """A portable, versioned collection of grading criteria."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    schema_version: Literal["1"] = "1"
     id: str | None = None
-    criteria: tuple[Criterion, ...] = Field(min_length=1)
+    version: str | None = None
+    title: str | None = None
+    description: str | None = None
     instructions: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    criteria: tuple[Criterion, ...] = Field(min_length=1)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
-    @field_validator("id", "instructions")
-    @classmethod
-    def _non_empty_optional_text(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        value = value.strip()
-        if not value:
-            raise ValueError("must not be empty")
-        return value
+    _normalize_optional = field_validator(
+        "id",
+        "version",
+        "title",
+        "description",
+        "instructions",
+    )(_strip_optional)
 
     @model_validator(mode="after")
     def _unique_criterion_ids(self) -> Self:
@@ -88,7 +164,7 @@ class Rubric(BaseModel):
         return self
 
     def criterion(self, criterion_id: str) -> Criterion:
-        """Return a criterion by id."""
+        """Return a criterion by identifier."""
 
         for criterion in self.criteria:
             if criterion.id == criterion_id:
@@ -97,21 +173,23 @@ class Rubric(BaseModel):
 
     @property
     def fingerprint(self) -> str:
-        """Return a deterministic fingerprint of the rubric's content."""
+        """Return a stable hash of the rubric content, excluding identity."""
 
-        content = self.model_dump(mode="python", exclude={"id"})
+        content = self.model_dump(
+            mode="json",
+            exclude={"id", "version"},
+        )
         encoded = json.dumps(
             content,
             sort_keys=True,
             separators=(",", ":"),
-            default=repr,
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True, slots=True, init=False)
 class Score:
-    """A scalar score with recursively composable component scores."""
+    """A scalar grading result with recursively composable components."""
 
     value: float
     components: Mapping[str, Score]
@@ -146,13 +224,13 @@ class Score:
 
     @classmethod
     def from_value(cls, value: float | Score) -> Score:
-        """Normalize a scalar or existing score into a :class:`Score`."""
+        """Normalize a scalar or existing score."""
 
         return value if isinstance(value, Score) else cls(float(value))
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Score:
-        """Deserialize a score from its structured dictionary form."""
+        """Deserialize a score from its dictionary representation."""
 
         if "value" not in value:
             raise ValueError("serialized score must contain 'value'")
@@ -184,12 +262,7 @@ class Score:
 
     @overload
     @classmethod
-    def from_info(
-        cls,
-        info: Mapping[str, Any],
-        *,
-        default: Score,
-    ) -> Score: ...
+    def from_info(cls, info: Mapping[str, Any], *, default: Score) -> Score: ...
 
     @overload
     @classmethod
@@ -207,7 +280,7 @@ class Score:
         *,
         default: Score | None = None,
     ) -> Score | None:
-        """Read an environment-produced score from Gymnasium ``info``."""
+        """Read a structured score from an environment info mapping."""
 
         value = info.get("score")
         if value is None:
@@ -220,12 +293,12 @@ class Score:
 
     @property
     def component_values(self) -> dict[str, float]:
-        """Return the immediate component names and scalar values."""
+        """Return the immediate component values."""
 
         return {name: component.value for name, component in self.components.items()}
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a structured, serialization-friendly representation."""
+        """Return a recursively serializable dictionary."""
 
         result: dict[str, Any] = {
             "value": self.value,
@@ -239,7 +312,7 @@ class Score:
         return result
 
     def as_info(self) -> dict[str, Any]:
-        """Return an ``info`` payload suitable for an environment step."""
+        """Return an environment ``info`` payload containing this score."""
 
         return {"score": self.to_dict()}
 
@@ -247,18 +320,246 @@ class Score:
 ScoreValue: TypeAlias = float | Score
 
 
-class Grader(Protocol[InputT, RubricT]):
-    """Callable that applies a rubric to an application-defined input."""
+def _with_rubric_metadata(score: Score, rubric: Rubric | None) -> Score:
+    if rubric is None:
+        return score
+    metadata = dict(score.metadata)
+    metadata.setdefault("rubric_fingerprint", rubric.fingerprint)
+    if rubric.id is not None:
+        metadata.setdefault("rubric_id", rubric.id)
+    if rubric.version is not None:
+        metadata.setdefault("rubric_version", rubric.version)
+    if metadata == score.metadata:
+        return score
+    return Score(
+        score.value,
+        score.components,
+        metadata,
+        feedback=score.feedback,
+    )
 
-    def __call__(
+
+def _sync_score(value: object, *, source: str) -> Score:
+    if inspect.isawaitable(value):
+        close = getattr(value, "close", None)
+        if callable(close):
+            close()
+        raise TypeError(f"{source} returned an awaitable; use an async grader")
+    return Score.from_value(cast(Any, value))
+
+
+class Grader(Generic[InputT], ABC):
+    """Synchronous grading contract.
+
+    The input type is application-defined. It may be a response, trajectory,
+    tool trace, comparison, or richer object containing reference material.
+    ``input_space`` declares and validates that type at runtime.
+    """
+
+    input_space: Space[InputT]
+
+    @final
+    def grade(
         self,
         input: InputT,
-        rubric: RubricT,
-        /,
-    ) -> ScoreValue | Awaitable[ScoreValue]: ...
+        *,
+        rubric: Rubric | None = None,
+    ) -> Score:
+        """Validate and grade one input, optionally according to a rubric."""
+
+        self._validate_input(input)
+        return self._grade(input, rubric=rubric)
+
+    @abstractmethod
+    def _grade(
+        self,
+        input: InputT,
+        *,
+        rubric: Rubric | None = None,
+    ) -> Score:
+        raise NotImplementedError
+
+    def _validate_input(self, input: InputT) -> None:
+        try:
+            valid = self.input_space.contains(input)
+        except AttributeError as error:
+            raise TypeError("grader must define an input_space") from error
+        if not valid:
+            raise ValueError(
+                f"grader input is outside input_space: {self.input_space!r}"
+            )
+
+    def bind(self, rubric: Rubric) -> Grader[InputT]:
+        """Return a grader with ``rubric`` fixed for later calls."""
+
+        return _BoundGrader(self, rubric)
+
+
+class AsyncGrader(Generic[InputT], ABC):
+    """Asynchronous grading contract with the same value-level semantics."""
+
+    input_space: Space[InputT]
+
+    @final
+    async def grade(
+        self,
+        input: InputT,
+        *,
+        rubric: Rubric | None = None,
+    ) -> Score:
+        """Validate and asynchronously grade one input."""
+
+        self._validate_input(input)
+        return await self._grade(input, rubric=rubric)
+
+    @abstractmethod
+    async def _grade(
+        self,
+        input: InputT,
+        *,
+        rubric: Rubric | None = None,
+    ) -> Score:
+        raise NotImplementedError
+
+    def _validate_input(self, input: InputT) -> None:
+        try:
+            valid = self.input_space.contains(input)
+        except AttributeError as error:
+            raise TypeError("grader must define an input_space") from error
+        if not valid:
+            raise ValueError(
+                f"grader input is outside input_space: {self.input_space!r}"
+            )
+
+    def bind(self, rubric: Rubric) -> AsyncGrader[InputT]:
+        """Return an async grader with ``rubric`` fixed for later calls."""
+
+        return _BoundAsyncGrader(self, rubric)
+
+
+class _BoundGrader(Grader[InputT]):
+    def __init__(self, grader: Grader[InputT], rubric: Rubric) -> None:
+        self.grader = grader
+        self.rubric = rubric
+        self.input_space = grader.input_space
+
+    def _grade(
+        self,
+        input: InputT,
+        *,
+        rubric: Rubric | None = None,
+    ) -> Score:
+        if rubric is not None and rubric != self.rubric:
+            raise ValueError("a bound grader cannot be used with another rubric")
+        return self.grader.grade(input, rubric=self.rubric)
+
+
+class _BoundAsyncGrader(AsyncGrader[InputT]):
+    def __init__(self, grader: AsyncGrader[InputT], rubric: Rubric) -> None:
+        self.grader = grader
+        self.rubric = rubric
+        self.input_space = grader.input_space
+
+    async def _grade(
+        self,
+        input: InputT,
+        *,
+        rubric: Rubric | None = None,
+    ) -> Score:
+        if rubric is not None and rubric != self.rubric:
+            raise ValueError("a bound grader cannot be used with another rubric")
+        return await self.grader.grade(input, rubric=self.rubric)
+
+
+GradeCallable: TypeAlias = Callable[
+    [CallableInputT, Rubric | None],
+    ScoreValue,
+]
+AsyncGradeCallable: TypeAlias = Callable[
+    [CallableInputT, Rubric | None],
+    ScoreValue | Awaitable[ScoreValue],
+]
+
+
+class CallableGrader(Grader[CallableInputT]):
+    """Adapt a synchronous callable to the grader contract."""
+
+    def __init__(
+        self,
+        function: GradeCallable[CallableInputT],
+        *,
+        input_space: Space[CallableInputT],
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.function = function
+        self.input_space = input_space
+        self.metadata = dict(metadata or {})
+
+    def _grade(
+        self,
+        input: CallableInputT,
+        *,
+        rubric: Rubric | None = None,
+    ) -> Score:
+        score = _sync_score(
+            self.function(input, rubric),
+            source="grade callable",
+        )
+        metadata = dict(self.metadata)
+        metadata.update(score.metadata)
+        score = Score(
+            score.value,
+            score.components,
+            metadata,
+            feedback=score.feedback,
+        )
+        return _with_rubric_metadata(score, rubric)
+
+
+class AsyncCallableGrader(AsyncGrader[CallableInputT]):
+    """Adapt a synchronous or asynchronous callable to the async contract."""
+
+    def __init__(
+        self,
+        function: AsyncGradeCallable[CallableInputT],
+        *,
+        input_space: Space[CallableInputT],
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.function = function
+        self.input_space = input_space
+        self.metadata = dict(metadata or {})
+
+    async def _grade(
+        self,
+        input: CallableInputT,
+        *,
+        rubric: Rubric | None = None,
+    ) -> Score:
+        value = self.function(input, rubric)
+        if inspect.isawaitable(value):
+            value = await value
+        score = Score.from_value(value)
+        metadata = dict(self.metadata)
+        metadata.update(score.metadata)
+        score = Score(
+            score.value,
+            score.components,
+            metadata,
+            feedback=score.feedback,
+        )
+        return _with_rubric_metadata(score, rubric)
 
 
 Aggregator: TypeAlias = Callable[[Rubric, Mapping[str, Score]], float]
+CriterionScorer: TypeAlias = Callable[
+    [RubricInputT, Criterion],
+    ScoreValue,
+]
+AsyncCriterionScorer: TypeAlias = Callable[
+    [RubricInputT, Criterion],
+    ScoreValue | Awaitable[ScoreValue],
+]
 
 
 def weighted_sum(rubric: Rubric, components: Mapping[str, Score]) -> float:
@@ -271,16 +572,14 @@ def weighted_sum(rubric: Rubric, components: Mapping[str, Score]) -> float:
 
 
 def weighted_mean(rubric: Rubric, components: Mapping[str, Score]) -> float:
-    """Return the normalized weighted mean of criterion component scores."""
+    """Return the normalized weighted mean of criterion scores."""
 
     total_weight = sum(criterion.weight for criterion in rubric.criteria)
-    if total_weight == 0:
-        raise ValueError("weighted mean requires at least one positive weight")
     return weighted_sum(rubric, components) / total_weight
 
 
 def all_pass(rubric: Rubric, components: Mapping[str, Score]) -> float:
-    """Return one only when every criterion has a value of at least one."""
+    """Return one only when every criterion score is at least one."""
 
     return float(all(components[item.id].value >= 1.0 for item in rubric.criteria))
 
@@ -292,11 +591,11 @@ def asymmetric_mean(
     bonus_weight: float = 1.0,
     penalty_weight: float = 1.0,
 ) -> float:
-    """Aggregate required, bonus, and penalty criteria asymmetrically.
+    """Aggregate ``required``, ``bonus``, and ``penalty`` categories.
 
-    Required and bonus criteria contribute their degree of satisfaction.
-    Penalty criteria subtract their degree of failure. Criterion weights apply
-    within each kind; ``bonus_weight`` and ``penalty_weight`` scale those terms.
+    Penalty criteria should describe the desired safe behavior: their degree of
+    failure is subtracted. Categories are optional rubric vocabulary rather
+    than a restriction on all criteria.
     """
 
     if not math.isfinite(bonus_weight) or bonus_weight < 0:
@@ -304,25 +603,32 @@ def asymmetric_mean(
     if not math.isfinite(penalty_weight) or penalty_weight < 0:
         raise ValueError("penalty_weight must be finite and non-negative")
 
-    supported = {"required", "bonus", "penalty"}
-    unknown = sorted({item.kind for item in rubric.criteria} - supported)
+    categories = {criterion.category or "required" for criterion in rubric.criteria}
+    unknown = sorted(categories - {"required", "bonus", "penalty"})
     if unknown:
-        raise ValueError(f"unsupported criterion kinds: {', '.join(unknown)}")
+        raise ValueError(f"unsupported criterion categories: {', '.join(unknown)}")
 
-    def mean(kind: str, *, failure: bool = False) -> float:
-        criteria = [item for item in rubric.criteria if item.kind == kind]
+    def mean(category: str, *, failure: bool = False) -> float:
+        criteria = [
+            item
+            for item in rubric.criteria
+            if (item.category or "required") == category
+        ]
         total = sum(item.weight for item in criteria)
         if total == 0:
             return 0.0
-        return sum(
-            item.weight
-            * (
-                1.0 - components[item.id].value
-                if failure
-                else components[item.id].value
+        return (
+            sum(
+                item.weight
+                * (
+                    1.0 - components[item.id].value
+                    if failure
+                    else components[item.id].value
+                )
+                for item in criteria
             )
-            for item in criteria
-        ) / total
+            / total
+        )
 
     return (
         mean("required")
@@ -331,88 +637,62 @@ def asymmetric_mean(
     )
 
 
-class CompositeGrader(Generic[CompositeInputT]):
-    """Apply criterion graders and aggregate their component scores.
-
-    One default grader can evaluate every criterion, while ``overrides`` can
-    provide specialized deterministic or model-based graders by criterion id.
-    Passing a mapping as the first argument retains the explicit per-id form.
-    """
+class RubricGrader(Grader[RubricInputT]):
+    """Grade each rubric criterion independently and aggregate the results."""
 
     def __init__(
         self,
-        grader: Grader[CompositeInputT, Criterion]
-        | Mapping[str, Grader[CompositeInputT, Criterion]],
+        scorer: CriterionScorer[RubricInputT]
+        | Mapping[str, CriterionScorer[RubricInputT]],
         *,
-        overrides: Mapping[str, Grader[CompositeInputT, Criterion]] | None = None,
+        input_space: Space[RubricInputT],
+        overrides: Mapping[str, CriterionScorer[RubricInputT]] | None = None,
         aggregate: Aggregator = weighted_mean,
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
-        if isinstance(grader, Mapping):
-            configured = dict(grader)
+        if isinstance(scorer, Mapping):
+            configured = dict(scorer)
             configured.update(overrides or {})
             if not configured:
-                raise ValueError("a composite grader requires at least one grader")
-            self._grader: Grader[CompositeInputT, Criterion] | None = None
+                raise ValueError("a rubric grader requires at least one scorer")
+            self._scorer: CriterionScorer[RubricInputT] | None = None
             self._overrides = configured
         else:
-            if not callable(grader):
-                raise TypeError("grader must be callable or a mapping of graders")
-            self._grader = grader
+            self._scorer = scorer
             self._overrides = dict(overrides or {})
-        if any(not name for name in self._overrides):
-            raise ValueError("grader names must be non-empty")
+        self.input_space = input_space
         self._aggregate = aggregate
         self._metadata = dict(metadata or {})
 
-    @property
-    def names(self) -> tuple[str, ...]:
-        """Return criterion ids with explicitly configured overrides."""
-
-        return tuple(self._overrides)
-
-    def __call__(self, input: CompositeInputT, rubric: Rubric, /) -> Score:
-        return self.score(input, rubric)
-
-    def score(self, input: CompositeInputT, rubric: Rubric, /) -> Score:
-        """Apply synchronous criterion graders."""
-
-        self._validate_rubric(rubric)
+    def _grade(
+        self,
+        input: RubricInputT,
+        *,
+        rubric: Rubric | None = None,
+    ) -> Score:
+        resolved_rubric = self._require_rubric(rubric)
+        self._validate_rubric(resolved_rubric)
         components: dict[str, Score] = {}
-        for criterion in rubric.criteria:
-            value = self._grader_for(criterion.id)(input, criterion)
-            if inspect.isawaitable(value):
-                close = getattr(value, "close", None)
-                if callable(close):
-                    close()
-                raise TypeError(
-                    f"grader {criterion.id!r} returned an awaitable; use ascore()"
-                )
-            components[criterion.id] = self._coerce_score(criterion.id, value)
-        return self._make_score(rubric, components)
+        for criterion in resolved_rubric.criteria:
+            components[criterion.id] = _sync_score(
+                self._scorer_for(criterion.id)(input, criterion),
+                source=f"criterion scorer {criterion.id!r}",
+            )
+        return self._make_score(resolved_rubric, components)
 
-    async def ascore(self, input: CompositeInputT, rubric: Rubric, /) -> Score:
-        """Apply synchronous or asynchronous criterion graders concurrently."""
+    def _require_rubric(self, rubric: Rubric | None) -> Rubric:
+        if rubric is None:
+            raise ValueError("RubricGrader requires a rubric")
+        return rubric
 
-        self._validate_rubric(rubric)
-
-        async def resolve(criterion: Criterion) -> tuple[str, Score]:
-            value = self._grader_for(criterion.id)(input, criterion)
-            if inspect.isawaitable(value):
-                value = await value
-            return criterion.id, self._coerce_score(criterion.id, value)
-
-        resolved = await asyncio.gather(*(resolve(item) for item in rubric.criteria))
-        return self._make_score(rubric, dict(resolved))
-
-    def _grader_for(self, criterion_id: str) -> Grader[CompositeInputT, Criterion]:
-        grader = self._overrides.get(criterion_id, self._grader)
-        if grader is None:
-            raise ValueError(f"no grader configured for rubric criterion: {criterion_id}")
-        return grader
+    def _scorer_for(self, criterion_id: str) -> CriterionScorer[RubricInputT]:
+        scorer = self._overrides.get(criterion_id, self._scorer)
+        if scorer is None:
+            raise ValueError(f"no scorer configured for criterion: {criterion_id}")
+        return scorer
 
     def _validate_rubric(self, rubric: Rubric) -> None:
-        if self._grader is not None:
+        if self._scorer is not None:
             return
         missing = [
             criterion.id
@@ -420,39 +700,107 @@ class CompositeGrader(Generic[CompositeInputT]):
             if criterion.id not in self._overrides
         ]
         if missing:
-            raise ValueError(
-                f"no grader configured for rubric criteria: {', '.join(missing)}"
-            )
+            raise ValueError(f"no scorer configured for criteria: {', '.join(missing)}")
 
     def _make_score(
         self,
         rubric: Rubric,
         components: dict[str, Score],
     ) -> Score:
-        metadata = dict(self._metadata)
-        metadata.setdefault("rubric_fingerprint", rubric.fingerprint)
-        if rubric.id is not None:
-            metadata.setdefault("rubric_id", rubric.id)
-        return Score(
-            value=self._aggregate(rubric, components),
-            components=components,
-            metadata=metadata,
+        return _with_rubric_metadata(
+            Score(
+                self._aggregate(rubric, components),
+                components,
+                self._metadata,
+            ),
+            rubric,
         )
 
-    @staticmethod
-    def _coerce_score(name: str, value: object) -> Score:
-        try:
-            return Score.from_value(cast(Any, value))
-        except (TypeError, ValueError) as exc:
-            raise TypeError(f"grader {name!r} did not return a numeric score") from exc
+
+class AsyncRubricGrader(AsyncGrader[RubricInputT]):
+    """Asynchronously grade rubric criteria with bounded implementation freedom."""
+
+    def __init__(
+        self,
+        scorer: AsyncCriterionScorer[RubricInputT]
+        | Mapping[str, AsyncCriterionScorer[RubricInputT]],
+        *,
+        input_space: Space[RubricInputT],
+        overrides: Mapping[str, AsyncCriterionScorer[RubricInputT]] | None = None,
+        aggregate: Aggregator = weighted_mean,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        if isinstance(scorer, Mapping):
+            configured = dict(scorer)
+            configured.update(overrides or {})
+            if not configured:
+                raise ValueError("an async rubric grader requires at least one scorer")
+            self._scorer: AsyncCriterionScorer[RubricInputT] | None = None
+            self._overrides = configured
+        else:
+            self._scorer = scorer
+            self._overrides = dict(overrides or {})
+        self.input_space = input_space
+        self._aggregate = aggregate
+        self._metadata = dict(metadata or {})
+
+    async def _grade(
+        self,
+        input: RubricInputT,
+        *,
+        rubric: Rubric | None = None,
+    ) -> Score:
+        if rubric is None:
+            raise ValueError("AsyncRubricGrader requires a rubric")
+        self._validate_rubric(rubric)
+
+        async def resolve(criterion: Criterion) -> tuple[str, Score]:
+            value = self._scorer_for(criterion.id)(input, criterion)
+            if inspect.isawaitable(value):
+                value = await value
+            return criterion.id, Score.from_value(value)
+
+        resolved = await asyncio.gather(*(resolve(item) for item in rubric.criteria))
+        components = dict(resolved)
+        return _with_rubric_metadata(
+            Score(
+                self._aggregate(rubric, components),
+                components,
+                self._metadata,
+            ),
+            rubric,
+        )
+
+    def _scorer_for(self, criterion_id: str) -> AsyncCriterionScorer[RubricInputT]:
+        scorer = self._overrides.get(criterion_id, self._scorer)
+        if scorer is None:
+            raise ValueError(f"no scorer configured for criterion: {criterion_id}")
+        return scorer
+
+    def _validate_rubric(self, rubric: Rubric) -> None:
+        if self._scorer is not None:
+            return
+        missing = [
+            criterion.id
+            for criterion in rubric.criteria
+            if criterion.id not in self._overrides
+        ]
+        if missing:
+            raise ValueError(f"no scorer configured for criteria: {', '.join(missing)}")
 
 
 __all__ = [
     "Aggregator",
-    "CompositeGrader",
+    "AsyncCallableGrader",
+    "AsyncGrader",
+    "AsyncRubricGrader",
     "Criterion",
+    "CriterionScorer",
+    "CallableGrader",
     "Grader",
+    "Level",
     "Rubric",
+    "RubricGrader",
     "Score",
     "ScoreValue",
     "all_pass",

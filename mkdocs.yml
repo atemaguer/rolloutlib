@@ -39,6 +39,10 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
-  - Concepts: concepts.md
+  - Concepts:
+      - Environments: concepts/environments.md
+      - Spaces: concepts/spaces.md
+      - Policies and rollouts: concepts/rollouts.md
+      - Graders and rubrics: concepts/graders.md
+      - Datasets and evaluation: concepts/datasets-and-evaluation.md
   - API reference: api.md
-  - Development: development.md
