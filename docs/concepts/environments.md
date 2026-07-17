@@ -53,11 +53,16 @@ from rolloutlib import GradingWrapper
 environment = GradingWrapper(
     ExistingEnv(item),
     grader=grader,
-    rubric=item.rubric,
     make_input=lambda env, action: (item, env.state, action),
 )
 ```
 
 By default, grading occurs on terminated or truncated steps, replaces the
 environment reward with `Score.value`, and retains the full score in `info`.
-Custom predicates and reward combiners can change those policies.
+Custom predicates and reward combiners can change those policies. When using a
+rubric grader, its rubric is already bound to the grader rather than passed
+through the environment wrapper.
+
+See [Composite graders](../graders/composite-graders.md#grading-inside-environments)
+for synchronous and asynchronous wrapper examples, terminal-step policies, and
+reward combination.

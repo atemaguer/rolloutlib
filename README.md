@@ -67,7 +67,6 @@ from rolloutlib import GradingWrapper
 
 environment = GradingWrapper(
     ExistingEnv(item),
-    rubric=item.rubric,
     grader=grader,
     make_input=lambda env, action: (item, env.state, action),
 )
@@ -181,15 +180,32 @@ streaming dataset without inheriting from these convenience containers.
 
 ## Graders
 
-Rubrics describe what should be evaluated; graders implement how to evaluate
-it. Every grader has an `input_space` describing the complete value it accepts,
-so a grader can safely score an action, trajectory, group, tool result, or
-arbitrary application context. The space may be shared with an environment
-space when the values are the same.
+`Grader` defines one operation: `grade(input) -> Score`. `AsyncGrader` provides
+the corresponding awaitable operation. Every grader has an `input_space`
+describing its complete input, so it can safely score a response, action,
+trajectory, tool trace, or richer application-defined record.
+
+Rolloutlib provides three grader families:
+
+- `RubricGrader` applies a portable, human-defined rubric through a user-owned
+  judge, commonly an LLM judge.
+- `RewardGrader` evaluates named programmatic reward functions.
+- `CompositeGrader` combines complete graders while preserving their nested
+  results.
+
+Each has an asynchronous counterpart.
 
 ```python
 from rolloutlib import spaces
-from rolloutlib.graders import Criterion, Level, Rubric, RubricGrader, Score
+from rolloutlib.graders import (
+    AsyncCompositeGrader,
+    AsyncRubricGrader,
+    Criterion,
+    Level,
+    RewardGrader,
+    Rubric,
+    Score,
+)
 
 rubric = Rubric(
     id="answer-quality",
@@ -226,69 +242,69 @@ rubric = Rubric(
     instructions="Grade only the submitted answer.",
 )
 
-grader = RubricGrader(
-    llm_criterion_grader,
+
+async def judge(answer: str, rubric: Rubric):
+    request = render_judge_request(answer, rubric)
+    response = await call_judge_model(request)
+    return {
+        "correctness": Score(
+            response.correctness,
+            feedback=response.correctness_feedback,
+        ),
+        "format": Score(
+            response.format,
+            feedback=response.format_feedback,
+        ),
+    }
+
+
+rubric_grader = AsyncRubricGrader(
+    rubric,
+    judge,
     input_space=spaces.text.text(min_length=1),
-    overrides={"correctness": exact_answer_grader},
 )
 
-score = grader.grade(answer, rubric=rubric)
+reward_grader = RewardGrader(
+    {
+        "exact_match": lambda answer: float(answer == reference_answer),
+        "has_citation": lambda answer: float("[1]" in answer),
+    },
+    input_space=spaces.text.text(min_length=1),
+    weights={"exact_match": 1.0, "has_citation": 0.1},
+)
+
+grader = AsyncCompositeGrader(
+    {"quality": rubric_grader, "verification": reward_grader},
+    input_space=spaces.text.text(min_length=1),
+    weights={"quality": 0.8, "verification": 0.2},
+)
+
+score = await grader.grade(answer)
 reward = score.value
 ```
 
-`Grader.grade(input, *, rubric=None)` is the standard synchronous contract and
-always returns a `Score`. `AsyncGrader` exposes the same value-level contract
-asynchronously. Before evaluation, both require the input to belong to the
-grader's `input_space`. Rubrics can vary per input or be fixed with
-`grader.bind(rubric)`, which preserves the same input space.
-
 Rubrics and criteria are strict Pydantic models designed to round-trip through
-JSON. Criteria remain flat and independently assessable. Optional `Level`
-objects describe classroom-style performance bands; criterion weights and
-aggregation remain separate concerns.
+JSON. A rubric is bound to its `RubricGrader`; the judge receives both the input
+and rubric and must return exactly one score per criterion ID. Model selection,
+provider SDKs, prompts, sampling settings, retries, caching, and tracing remain
+application-owned.
 
-`RubricGrader` evaluates each criterion independently and combines the
-component scores with a weighted mean by default. `AsyncRubricGrader` evaluates
-independent criteria concurrently. `weighted_sum`, `all_pass`,
-`asymmetric_mean`, and custom aggregation functions are also available.
+Reward functions receive only the grader input and return a scalar or `Score`.
+Their named outputs are combined with a weighted sum by default. Composite
+graders use a weighted mean by default and preserve each child grader's full
+score tree. Custom aggregation functions are supported by all three families.
 
-`Score` is recursive: its named components are themselves scores and may carry
-feedback and metadata. Environments use the scalar value as reward while
-retaining the complete grading record:
+`Score` is recursive: components may carry their own feedback, metadata, and
+subcomponents. Environments use its scalar value as reward while retaining the
+complete grading record under `info["score"]`.
 
-```python
-score = Score(
-    0.75,
-    {
-        "correctness": Score(1.0, feedback="Correct."),
-        "format": Score(0.5, feedback="One required heading is missing."),
-    },
-)
-info.update(score.as_info())
-assert Score.from_info(info) == score
-```
-
-An LLM-mediated grader uses the same callable adapter as any other grader:
-
-```python
-from rolloutlib.graders import AsyncCallableGrader
-
-
-async def grade_with_judge(answer, rubric):
-    request = render_judge_request(answer, rubric)
-    response = await call_judge_model(request)  # user-owned model interaction
-    return parse_judge_response(response)
-
-
-grader = AsyncCallableGrader(
-    grade_with_judge,
-    input_space=spaces.text.text(min_length=1),
-)
-```
-
-This keeps model selection, provider SDKs, prompts, sampling settings, retries,
-caching, and tracing on the application side. The grader contract remains the
-same for deterministic, model-mediated, and hybrid grading.
+The documentation covers the complete [grader
+contract](docs/concepts/graders.md), [rubric
+schema](docs/graders/rubrics.md), [programmatic reward
+graders](docs/graders/reward-graders.md), [composition and environment
+integration](docs/graders/composite-graders.md), [scores and
+aggregation](docs/graders/scores-and-aggregation.md), and [representative
+examples](docs/graders/examples.md).
 
 ## Evaluation
 

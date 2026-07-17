@@ -22,10 +22,10 @@ from rolloutlib.envs import (
     check_async_env,
 )
 from rolloutlib.graders import (
-    AsyncCallableGrader,
+    AsyncRubricGrader,
     Criterion,
-    CallableGrader,
     Rubric,
+    RubricGrader,
     Score,
 )
 
@@ -377,12 +377,11 @@ def test_sync_grading_wrapper_grades_inside_step() -> None:
     )
     env = GradingWrapper(
         EchoEnv(),
-        rubric=rubric,
-        grader=CallableGrader(
-            lambda action, _: Score(
-                float(action == 3),
-                {"correct": float(action == 3)},
-            ),
+        grader=RubricGrader(
+            rubric,
+            lambda action, rubric: {
+                "correct": Score(float(action == 3)),
+            },
             input_space=gym.spaces.Discrete(10),
         ),
         make_input=lambda environment, action: action,
@@ -401,18 +400,18 @@ def test_sync_grading_wrapper_grades_inside_step() -> None:
 
 def test_async_grading_wrapper_awaits_grading_inside_step() -> None:
     async def run() -> None:
-        async def grade(action: int, rubric: Rubric | None) -> Score:
+        async def judge(action: int, rubric: Rubric) -> dict[str, Score]:
             await asyncio.sleep(0)
-            return Score(float(action == 3), {"correct": float(action == 3)})
+            return {"correct": Score(float(action == 3))}
 
         rubric = Rubric(
             criteria=(Criterion(id="correct", description="The value reaches five."),)
         )
         env = AsyncGradingWrapper(
             CountingAsyncEnv(),
-            rubric=rubric,
-            grader=AsyncCallableGrader(
-                grade,
+            grader=AsyncRubricGrader(
+                rubric,
+                judge,
                 input_space=gym.spaces.Discrete(10),
             ),
             make_input=lambda environment, action: action,

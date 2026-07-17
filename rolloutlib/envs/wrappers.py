@@ -10,8 +10,7 @@ from typing import Any, Generic, TypeVar, cast
 import gymnasium as gym
 from gymnasium.spaces import Space
 
-from ..graders import AsyncGrader, Grader, Rubric, Score
-from ..graders.core import _with_rubric_metadata
+from ..graders import AsyncGrader, Grader, Score
 from .core import AsyncEnv
 
 
@@ -46,14 +45,12 @@ class GradingWrapper(
         self,
         env: gym.Env[ObsT, ActT],
         *,
-        rubric: Rubric | None = None,
         grader: Grader[InputT],
         make_input: Callable[[gym.Env[ObsT, ActT], ActT], InputT],
         when: Callable[[bool, bool], bool] = _terminal,
         combine_reward: Callable[[float, Score], float] = _replace_reward,
     ) -> None:
         super().__init__(env)
-        self.rubric = rubric
         self.grader = grader
         self.make_input = make_input
         self.when = when
@@ -64,13 +61,7 @@ class GradingWrapper(
         scalar_reward = float(reward)
         if not self.when(terminated, truncated):
             return observation, scalar_reward, terminated, truncated, info
-        score = _with_rubric_metadata(
-            self.grader.grade(
-                self.make_input(self.env, action),
-                rubric=self.rubric,
-            ),
-            self.rubric,
-        )
+        score = self.grader.grade(self.make_input(self.env, action))
         resolved_info = dict(info)
         resolved_info.update(score.as_info())
         return (
@@ -207,14 +198,12 @@ class AsyncGradingWrapper(
         self,
         env: AsyncEnv[ObsT, ActT],
         *,
-        rubric: Rubric | None = None,
         grader: Grader[InputT] | AsyncGrader[InputT],
         make_input: Callable[[AsyncEnv[ObsT, ActT], ActT], InputT],
         when: Callable[[bool, bool], bool] = _terminal,
         combine_reward: Callable[[float, Score], float] = _replace_reward,
     ) -> None:
         super().__init__(env)
-        self.rubric = rubric
         self.grader = grader
         self.make_input = make_input
         self.when = when
@@ -227,13 +216,10 @@ class AsyncGradingWrapper(
         scalar_reward = float(reward)
         if not self.when(terminated, truncated):
             return observation, scalar_reward, terminated, truncated, info
-        value = self.grader.grade(
-            self.make_input(self.env, action),
-            rubric=self.rubric,
-        )
+        value = self.grader.grade(self.make_input(self.env, action))
         if inspect.isawaitable(value):
             value = await value
-        score = _with_rubric_metadata(value, self.rubric)
+        score = value
         resolved_info = dict(info)
         resolved_info.update(score.as_info())
         return (

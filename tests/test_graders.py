@@ -6,12 +6,14 @@ import gymnasium as gym
 import pytest
 
 from rolloutlib.graders import (
-    AsyncCallableGrader,
+    AsyncCompositeGrader,
     AsyncGrader,
+    AsyncRewardGrader,
     AsyncRubricGrader,
+    CompositeGrader,
     Criterion,
-    CallableGrader,
     Grader,
+    RewardGrader,
     Rubric,
     RubricGrader,
     Score,
@@ -45,85 +47,97 @@ def answer_rubric() -> Rubric:
     )
 
 
-def test_callable_grader_normalizes_results_and_supports_binding() -> None:
-    grader = CallableGrader[str](
-        lambda answer, rubric: float(answer == "42"),
-        input_space=ANSWER_SPACE,
-        metadata={"implementation": "exact-match"},
-    )
+def test_rubric_grader_binds_a_rubric_and_validates_criterion_results() -> None:
     rubric = answer_rubric()
-
-    direct = grader.grade("42", rubric=rubric)
-    bound = grader.bind(rubric).grade("42")
-
-    assert direct == bound
-    assert direct.value == 1.0
-    assert direct.metadata["implementation"] == "exact-match"
-    assert direct.metadata["rubric_id"] == "answer-quality"
-    assert direct.metadata["rubric_version"] == "1"
-
-    with pytest.raises(ValueError, match="another rubric"):
-        grader.bind(rubric).grade(
-            "42",
-            rubric=Rubric(criteria=(Criterion(id="other", description="Other."),)),
-        )
-
-
-def test_rubric_grader_scores_each_criterion() -> None:
     grader = RubricGrader[str](
-        lambda answer, criterion: 0.5 if answer.isdigit() else 0.0,
-        input_space=ANSWER_SPACE,
-        overrides={
-            "correctness": lambda answer, criterion: Score(
+        rubric,
+        lambda answer, rubric: {
+            "correctness": Score(
                 float(answer == "42"),
                 feedback="The answer is correct.",
             ),
+            "format": 0.5,
         },
-        metadata={"grader": "local"},
+        input_space=ANSWER_SPACE,
+        metadata={"judge": "test"},
     )
 
-    score = grader.grade("42", rubric=answer_rubric())
+    score = grader.grade("42")
 
+    assert grader.rubric is rubric
     assert score.value == pytest.approx(2.125 / 2.25)
     assert score.component_values == {"correctness": 1.0, "format": 0.5}
     assert score.components["correctness"].feedback == "The answer is correct."
-    assert score.metadata["grader"] == "local"
+    assert score.metadata["judge"] == "test"
+    assert score.metadata["rubric_id"] == "answer-quality"
+    assert score.metadata["rubric_version"] == "1"
 
 
 def test_rubric_grader_supports_custom_aggregation() -> None:
+    rubric = answer_rubric()
     grader = RubricGrader[str](
-        {
-            "correctness": lambda answer, criterion: float(answer == "42"),
-            "format": lambda answer, criterion: 0.5,
+        rubric,
+        lambda answer, rubric: {
+            "correctness": float(answer == "42"),
+            "format": 0.5,
         },
         input_space=ANSWER_SPACE,
         aggregate=weighted_sum,
     )
 
-    assert grader.grade("42", rubric=answer_rubric()).value == pytest.approx(2.125)
+    assert grader.grade("42").value == pytest.approx(2.125)
 
 
-def test_rubric_grader_requires_a_rubric_and_all_scorers() -> None:
-    grader = RubricGrader[str](
-        {"correctness": lambda answer, criterion: float(answer == "42")},
+def test_rubric_grader_rejects_missing_and_unknown_criterion_results() -> None:
+    rubric = answer_rubric()
+    missing = RubricGrader(
+        rubric,
+        lambda answer, rubric: {"correctness": 1.0},
+        input_space=ANSWER_SPACE,
+    )
+    unknown = RubricGrader(
+        rubric,
+        lambda answer, rubric: {
+            "correctness": 1.0,
+            "format": 1.0,
+            "style": 1.0,
+        },
         input_space=ANSWER_SPACE,
     )
 
-    with pytest.raises(ValueError, match="requires a rubric"):
+    with pytest.raises(ValueError, match="omitted components: format"):
+        missing.grade("42")
+    with pytest.raises(ValueError, match="unknown components: style"):
+        unknown.grade("42")
+
+
+def test_rubric_grader_requires_a_mapping_of_criterion_results() -> None:
+    grader = RubricGrader(
+        answer_rubric(),
+        lambda answer, rubric: 1.0,  # type: ignore[arg-type,return-value]
+        input_space=ANSWER_SPACE,
+    )
+
+    with pytest.raises(TypeError, match="must return a mapping"):
         grader.grade("42")
-    with pytest.raises(ValueError, match="format"):
-        grader.grade("42", rubric=answer_rubric())
 
 
-def test_async_callable_grader_accepts_sync_and_async_callables() -> None:
+def test_async_rubric_grader_accepts_a_sync_or_async_judge() -> None:
     async def run() -> None:
-        async def exact(answer: str, rubric: Rubric | None) -> float:
-            await asyncio.sleep(0)
-            return float(answer == "42")
+        rubric = answer_rubric()
 
-        async_grader = AsyncCallableGrader(exact, input_space=ANSWER_SPACE)
-        sync_grader = AsyncCallableGrader(
-            lambda answer, rubric: float(answer == "42"),
+        async def judge(answer: str, rubric: Rubric) -> dict[str, float]:
+            await asyncio.sleep(0)
+            return {"correctness": float(answer == "42"), "format": 1.0}
+
+        async_grader = AsyncRubricGrader(
+            rubric,
+            judge,
+            input_space=ANSWER_SPACE,
+        )
+        sync_grader = AsyncRubricGrader(
+            rubric,
+            lambda answer, rubric: {"correctness": 1.0, "format": 1.0},
             input_space=ANSWER_SPACE,
         )
 
@@ -133,13 +147,57 @@ def test_async_callable_grader_accepts_sync_and_async_callables() -> None:
     asyncio.run(run())
 
 
-def test_async_rubric_grader_runs_criteria_concurrently() -> None:
+def test_reward_grader_combines_named_reward_functions() -> None:
+    grader = RewardGrader[str](
+        {
+            "correctness": lambda answer: Score(
+                float(answer == "42"),
+                feedback="Exact match.",
+            ),
+            "format": lambda answer: 0.5,
+        },
+        input_space=ANSWER_SPACE,
+        weights={"correctness": 2.0, "format": 0.25},
+        metadata={"suite": "answer"},
+    )
+
+    score = grader.grade("42")
+
+    assert score.value == pytest.approx(2.125)
+    assert score.component_values == {"correctness": 1.0, "format": 0.5}
+    assert score.components["correctness"].feedback == "Exact match."
+    assert score.metadata["suite"] == "answer"
+
+
+def test_reward_grader_supports_custom_aggregation_and_validates_weights() -> None:
+    gated = RewardGrader[str](
+        {
+            "quality": lambda answer: 0.75,
+            "tests": lambda answer: 0.0,
+        },
+        input_space=ANSWER_SPACE,
+        aggregate=lambda scores: (
+            scores["quality"].value if scores["tests"].value == 1.0 else 0.0
+        ),
+    )
+
+    assert gated.grade("42").value == 0.0
+
+    with pytest.raises(ValueError, match="unknown components"):
+        RewardGrader(
+            {"correctness": lambda answer: 1.0},
+            input_space=ANSWER_SPACE,
+            weights={"other": 1.0},
+        )
+
+
+def test_async_reward_grader_runs_rewards_concurrently() -> None:
     async def run() -> None:
         release = asyncio.Event()
         both_started = asyncio.Event()
         started = 0
 
-        async def scorer(value: object, criterion: Criterion) -> float:
+        async def reward(value: object) -> float:
             nonlocal started
             started += 1
             if started == 2:
@@ -147,24 +205,83 @@ def test_async_rubric_grader_runs_criteria_concurrently() -> None:
             await release.wait()
             return 1.0
 
-        rubric = Rubric(
-            criteria=(
-                Criterion(id="first", description="First."),
-                Criterion(id="second", description="Second."),
-            )
-        )
-        grader = AsyncRubricGrader(
-            {"first": scorer, "second": scorer},
+        grader = AsyncRewardGrader(
+            {"first": reward, "second": reward},
             input_space=PydanticSpace(object),
         )
-        evaluation = asyncio.create_task(grader.grade(object(), rubric=rubric))
+        evaluation = asyncio.create_task(grader.grade(object()))
 
         await asyncio.wait_for(both_started.wait(), timeout=1)
         assert not evaluation.done()
         release.set()
         score = await evaluation
-        assert score.value == 1.0
+        assert score.value == 2.0
         assert score.component_values == {"first": 1.0, "second": 1.0}
+
+    asyncio.run(run())
+
+
+def test_composite_grader_preserves_nested_scores() -> None:
+    rubric_grader = RubricGrader[str](
+        answer_rubric(),
+        lambda answer, rubric: {
+            "correctness": float(answer == "42"),
+            "format": 0.5,
+        },
+        input_space=ANSWER_SPACE,
+    )
+    reward_grader = RewardGrader[str](
+        {"tests": lambda answer: float(answer == "42")},
+        input_space=ANSWER_SPACE,
+    )
+    grader = CompositeGrader[str](
+        {
+            "quality": rubric_grader,
+            "verification": reward_grader,
+        },
+        input_space=ANSWER_SPACE,
+        weights={"quality": 0.4, "verification": 0.6},
+    )
+
+    score = grader.grade("42")
+
+    expected_quality = 2.125 / 2.25
+    assert score.value == pytest.approx(0.4 * expected_quality + 0.6)
+    assert score.component_values == {
+        "quality": pytest.approx(expected_quality),
+        "verification": 1.0,
+    }
+    assert score.components["quality"].component_values == {
+        "correctness": 1.0,
+        "format": 0.5,
+    }
+    assert score.components["verification"].component_values == {"tests": 1.0}
+
+
+def test_async_composite_grader_accepts_sync_and_async_children() -> None:
+    async def run() -> None:
+        sync_grader = RewardGrader[str](
+            {"exact": lambda answer: float(answer == "42")},
+            input_space=ANSWER_SPACE,
+        )
+
+        async def slow(answer: str) -> float:
+            await asyncio.sleep(0)
+            return 0.5
+
+        async_grader = AsyncRewardGrader[str](
+            {"style": slow},
+            input_space=ANSWER_SPACE,
+        )
+        grader = AsyncCompositeGrader[str](
+            {"verification": sync_grader, "quality": async_grader},
+            input_space=ANSWER_SPACE,
+        )
+
+        score = await grader.grade("42")
+
+        assert score.value == 0.75
+        assert score.component_values == {"verification": 1.0, "quality": 0.5}
 
     asyncio.run(run())
 
@@ -186,7 +303,7 @@ def test_score_is_recursive_and_serializes_through_info() -> None:
         Score(float("nan"))
 
 
-def test_additional_aggregation_strategies() -> None:
+def test_additional_rubric_aggregation_strategies() -> None:
     rubric = Rubric(
         criteria=(
             Criterion(id="required", description="Required."),
@@ -208,51 +325,30 @@ def test_additional_aggregation_strategies() -> None:
     assert asymmetric_mean(rubric, components) == pytest.approx(0.5)
 
 
-def test_grader_contracts_are_nominal_and_return_scores() -> None:
-    grader: Grader[str] = CallableGrader(
-        lambda answer, rubric: float(answer == "42"),
-        input_space=ANSWER_SPACE,
-    )
-    async_grader: AsyncGrader[str] = AsyncCallableGrader(
-        lambda answer, rubric: float(answer == "42"),
-        input_space=ANSWER_SPACE,
-    )
+def test_grader_contracts_are_nominal_and_enforce_input_spaces() -> None:
+    called = False
+
+    class ExactMatchGrader(Grader[str]):
+        input_space = ANSWER_SPACE
+
+        def _grade(self, input: str) -> Score:
+            nonlocal called
+            called = True
+            return Score(float(input == "42"))
+
+    class AsyncExactMatchGrader(AsyncGrader[str]):
+        input_space = ANSWER_SPACE
+
+        async def _grade(self, input: str) -> Score:
+            return Score(float(input == "42"))
+
+    grader: Grader[str] = ExactMatchGrader()
+    async_grader: AsyncGrader[str] = AsyncExactMatchGrader()
 
     assert grader.grade("42") == Score(1.0)
     assert asyncio.run(async_grader.grade("42")) == Score(1.0)
 
-
-def test_graders_enforce_their_input_space_before_evaluation() -> None:
     called = False
-
-    def grade(answer: str, rubric: Rubric | None) -> float:
-        nonlocal called
-        called = True
-        return 1.0
-
-    grader = CallableGrader(grade, input_space=ANSWER_SPACE)
-
     with pytest.raises(ValueError, match="outside input_space"):
         grader.grade(42)  # type: ignore[arg-type]
-
     assert called is False
-    assert grader.bind(answer_rubric()).input_space is ANSWER_SPACE
-
-
-def test_custom_graders_can_declare_input_space_on_the_class() -> None:
-    class ExactMatchGrader(Grader[str]):
-        input_space = ANSWER_SPACE
-
-        def _grade(
-            self,
-            input: str,
-            *,
-            rubric: Rubric | None = None,
-        ) -> Score:
-            return Score(float(input == "42"))
-
-    grader = ExactMatchGrader()
-
-    assert grader.grade("42") == Score(1.0)
-    with pytest.raises(ValueError, match="outside input_space"):
-        grader.grade("")  # The declared space requires at least one character.

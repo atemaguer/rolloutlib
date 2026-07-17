@@ -1,63 +1,71 @@
-# Graders and rubrics
+# Graders
 
-A grader turns an application-defined input into a `Score`. The input may be a
-response, action, trajectory, tool trace, comparison, or richer object
-containing references and task state.
+A grader turns an application-defined input into a structured `Score`.
+Rolloutlib standardizes this boundary so environments, evaluation loops, and
+training systems can consume grading signals without knowing how those signals
+were produced.
 
-Grading has five concepts:
+The input can be anything an application needs to assess:
 
-- `Grader` defines the synchronous `grade` operation.
-- `AsyncGrader` provides the same value-level contract asynchronously.
-- `input_space` describes the values a grader accepts.
-- `Rubric` and `Criterion` describe what should be assessed.
-- `Score` records the scalar result and its component results.
+- one model response;
+- a prompt, response, and reference answer;
+- an environment action;
+- a complete trajectory;
+- a tool call and its result;
+- a pair or group of candidate responses.
 
-## The grader contract
+The abstraction deliberately does not prescribe a universal grading record or
+model provider.
 
-Synchronous graders implement:
+## The common contract
+
+Every synchronous grader implements:
 
 ```python
-score = grader.grade(input, rubric=rubric)
+score = grader.grade(input)
 ```
 
-Async graders implement the same operation as an awaitable:
+Every asynchronous grader implements:
 
 ```python
-score = await grader.grade(input, rubric=rubric)
+score = await grader.grade(input)
 ```
 
-Both always return `Score`. Rubrics are optional because deterministic
-verifiers and reward functions may fully define their own grading behavior.
-A grader that requires a rubric should reject a missing rubric explicitly.
+Both operations always return `Score`. The rubric, reward functions, model
+client, and aggregation policy are configuration of a particular grader; they
+are not additional arguments to `grade`.
 
-Every grader declares a Gymnasium-compatible `input_space`. The public
-`grade()` operation checks the input against this space before running any
-deterministic check or model call. Invalid values raise `ValueError`.
+This narrow contract is the point of the abstraction. Code that consumes a
+grader only needs to know:
+
+1. what value belongs to its `input_space`;
+2. whether the grader is synchronous or asynchronous;
+3. that the result is a `Score`.
+
+## Input spaces
+
+Every grader declares a Gymnasium-compatible `input_space`. This plays the same
+role as an environment's action and observation spaces: it documents the
+accepted values and validates them at the public boundary.
+
+For a response-only grader, a text space is enough:
 
 ```python
 from rolloutlib import spaces
-from rolloutlib.graders import CallableGrader
 
-grader = CallableGrader(
-    exact_match,
-    input_space=spaces.text.text(min_length=1, max_length=1_000),
-)
-
-assert "42" in grader.input_space
-score = grader.grade("42")
+answer_space = spaces.text.text(min_length=1, max_length=8_000)
 ```
 
-The space describes the whole input to the grader, not necessarily only the
-candidate response. A task that needs context can define a `TypedDict`,
-Pydantic model, or other type and use `PydanticSpace`:
+For a richer input, define an application model and wrap it in
+`PydanticSpace`:
 
 ```python
-from typing import TypedDict
+from pydantic import BaseModel
 
 from rolloutlib.spaces import PydanticSpace
 
 
-class GradingInput(TypedDict):
+class GradingInput(BaseModel):
     prompt: str
     response: str
     reference_answer: str
@@ -66,12 +74,183 @@ class GradingInput(TypedDict):
 grading_input_space = PydanticSpace(GradingInput)
 ```
 
-This makes string graders, trajectory graders, preference graders, and richer
-task-specific graders interoperable through the same contract without imposing
-one universal input record. When a grader directly evaluates an environment
-action or observation, it can reuse that environment space.
+The space describes the complete value supplied to `grade`. It is not limited
+to the generated response. This lets different domains define appropriate
+records while preserving one grader contract.
 
-Custom graders normally declare the space alongside their grading behavior:
+Input validation occurs before any reward function, judge, or child grader is
+invoked. An invalid value raises `ValueError`.
+
+## The three grader families
+
+Rolloutlib provides three concrete families:
+
+| Family | Component scores come from | Default aggregation | Use it for |
+| --- | --- | --- | --- |
+| `RubricGrader` | one judge applying a bound `Rubric` | weighted mean | qualitative, human-defined, or LLM-mediated judgment |
+| `RewardGrader` | named reward functions | weighted sum | exact checks, tests, validators, and heuristics |
+| `CompositeGrader` | complete child graders | weighted mean | hybrid rewards and reusable grading pipelines |
+
+Each has an async counterpart:
+
+- `AsyncRubricGrader`;
+- `AsyncRewardGrader`;
+- `AsyncCompositeGrader`.
+
+The families are complementary rather than mutually exclusive. A common
+post-training reward uses:
+
+- a rubric grader for answer quality;
+- a reward grader for deterministic correctness and formatting checks;
+- a composite grader to combine the two without losing either result.
+
+## Rubric graders
+
+A rubric is portable data describing what should be judged. A rubric grader
+binds that data to a user-owned judge:
+
+```python
+from rolloutlib.graders import RubricGrader
+
+grader = RubricGrader(
+    rubric,
+    judge,
+    input_space=grading_input_space,
+)
+```
+
+The judge receives `(input, rubric)` and returns a mapping from every criterion
+ID to a scalar or `Score`. It is called once per grading operation, so it can
+make one holistic model request or coordinate several specialized checks.
+
+Rubric graders are particularly useful for LLM judges, but they do not own the
+model interaction. The application remains responsible for provider clients,
+prompts, structured outputs, retries, caching, and tracing.
+
+See [Rubrics and rubric graders](../graders/rubrics.md) for the complete schema,
+JSON interchange, judge contract, metadata, and model-mediated examples.
+
+## Reward graders
+
+A reward grader evaluates separately named programmatic functions:
+
+```python
+from rolloutlib.graders import RewardGrader
+
+grader = RewardGrader(
+    {
+        "exact_match": exact_match,
+        "valid_format": valid_format,
+    },
+    input_space=grading_input_space,
+    weights={"exact_match": 1.0, "valid_format": 0.1},
+)
+```
+
+Each reward function receives the input and returns a scalar or `Score`. The
+named outputs become visible components of the result.
+
+See [Reward graders](../graders/reward-graders.md) for function contracts,
+weights, custom aggregation, async execution, and examples.
+
+## Composite graders
+
+A composite grader evaluates complete child graders and retains their score
+trees:
+
+```python
+from rolloutlib.graders import CompositeGrader
+
+grader = CompositeGrader(
+    {
+        "quality": rubric_grader,
+        "verification": reward_grader,
+    },
+    input_space=grading_input_space,
+    weights={"quality": 0.8, "verification": 0.2},
+)
+```
+
+Every child receives the same input. If the children need different context,
+define a shared input record containing all required fields.
+
+See [Composite graders](../graders/composite-graders.md) for nesting,
+sync/async composition, environment wrappers, and hybrid reward design.
+
+## Scores are data, not only rewards
+
+`Score.value` is the scalar reward. `Score.components` contains named child
+scores, allowing a result to preserve how that scalar was produced:
+
+```python
+from rolloutlib.graders import Score
+
+score = Score(
+    0.9,
+    {
+        "quality": Score(
+            0.8,
+            {
+                "correctness": Score(0.75, feedback="One reasoning gap."),
+                "format": Score(1.0),
+            },
+        ),
+        "verification": Score(
+            1.0,
+            {"exact_match": Score(1.0)},
+        ),
+    },
+)
+```
+
+The recursive structure supports both training and diagnosis: optimizers can
+consume the scalar while evaluation and observability systems inspect
+components, feedback, and metadata.
+
+See [Scores and aggregation](../graders/scores-and-aggregation.md) for
+serialization, environment `info`, built-in aggregators, formulas, and custom
+policies.
+
+## Synchronous and asynchronous grading
+
+Choose the synchronous family when every operation is local and synchronous.
+Choose the async family when any judge, reward function, or child grader makes
+network requests or performs asynchronous I/O.
+
+The async variants accept both sync and async user operations where useful:
+
+| Async grader | Accepted operations |
+| --- | --- |
+| `AsyncRubricGrader` | a sync or async judge |
+| `AsyncRewardGrader` | sync and async reward functions |
+| `AsyncCompositeGrader` | sync and async child graders |
+
+Independent reward functions and child graders are scheduled concurrently.
+Synchronous graders reject awaitable results instead of silently running an
+event loop.
+
+## Public value and callable types
+
+The public type aliases make extension points explicit:
+
+| Type | Meaning |
+| --- | --- |
+| `ScoreValue` | `float \| Score` |
+| `RewardFunction[InputT]` | synchronous `InputT -> ScoreValue` |
+| `AsyncRewardFunction[InputT]` | sync or awaitable `InputT -> ScoreValue` |
+| `RubricJudge[InputT]` | synchronous `(InputT, Rubric) -> criterion mapping` |
+| `AsyncRubricJudge[InputT]` | sync or awaitable rubric judge |
+| `ScoreAggregator` | named component scores to a scalar |
+| `RubricAggregator` | rubric plus criterion scores to a scalar |
+
+These aliases are optional conveniences for annotations; ordinary compatible
+callables work without explicitly importing them.
+
+## Extending the contract
+
+Applications can define a specialized grader when the standard families do not
+fit. The public `grade` method owns input validation; subclasses implement
+`_grade`:
 
 ```python
 from rolloutlib import Grader, Score, spaces
@@ -80,153 +259,42 @@ from rolloutlib import Grader, Score, spaces
 class ExactMatchGrader(Grader[str]):
     input_space = spaces.text.text(min_length=1)
 
-    def _grade(self, input, *, rubric=None):
-        return Score(float(input == "42"))
+    def _grade(self, input: str) -> Score:
+        return Score(float(input.strip() == "42"))
 ```
 
-`grade()` remains the single public operation: it owns input validation and
-then invokes the custom grading behavior.
+Use a custom subclass for a genuinely new grading protocol. Prefer
+`RewardGrader` when the behavior is simply one or more named functions, because
+the standard implementation preserves component names, weights, and metadata.
 
-Rubrics are passed at grading time because they may vary by dataset item. When
-one rubric is fixed for many calls, bind it:
+## Ownership boundaries
 
-```python
-bound = grader.bind(rubric)
-score = bound.grade(input)
-```
+Rolloutlib owns:
 
-`CallableGrader` and `AsyncCallableGrader` adapt ordinary callables to the
-standard contracts. The callable may contain deterministic logic, an LLM call,
-or any other grading implementation.
+- input validation through `input_space`;
+- the `grade(input) -> Score` contract;
+- portable rubric and criterion schemas;
+- component normalization and aggregation;
+- structured score serialization;
+- sync and async composition.
 
-## Rubrics as portable data
+Application code owns:
 
-Rubrics are strict, frozen Pydantic models. They preserve criterion order,
-round-trip through JSON, publish a JSON Schema, and provide a stable content
-fingerprint.
+- the shape of domain-specific grader inputs;
+- model providers and inference clients;
+- prompts and structured-output parsing;
+- retries, rate limiting, caching, and tracing;
+- calibration data and human evaluation;
+- the final choice of reward scaling and aggregation.
 
-```python
-from rolloutlib import Criterion, Level, Rubric
+This separation keeps grader implementations portable across inference and
+training backends.
 
-rubric = Rubric(
-    id="answer-quality",
-    version="1",
-    title="Answer quality",
-    criteria=(
-        Criterion(
-            id="correctness",
-            description="The answer reaches a correct conclusion.",
-            weight=4.0,
-            levels=(
-                Level(
-                    id="complete",
-                    description="The conclusion and reasoning are correct.",
-                    score=1.0,
-                ),
-                Level(
-                    id="partial",
-                    description="The conclusion is correct with a reasoning gap.",
-                    score=0.5,
-                ),
-                Level(
-                    id="incorrect",
-                    description="The conclusion is incorrect.",
-                    score=0.0,
-                ),
-            ),
-        ),
-    ),
-)
+## Next steps
 
-encoded = rubric.model_dump_json()
-restored = Rubric.model_validate_json(encoded)
-schema = Rubric.model_json_schema()
-```
-
-`schema_version` versions the interchange format. `id` and `version` identify a
-particular published rubric but are excluded from its content fingerprint.
-Metadata must contain JSON-compatible values.
-
-## Criteria and levels
-
-A criterion is one independently assessable requirement. Criteria intentionally
-remain flat: `category` and metadata can organize them without making scoring
-semantics recursive.
-
-Levels are optional performance bands within a criterion. Their scores range
-from zero to one. Criterion weight expresses relative importance separately
-from the selected performance level. Criteria without levels can be scored
-continuously.
-
-Criterion-level results conventionally use criterion IDs as component names:
-
-```python
-Score(
-    value=0.8,
-    components={
-        "correctness": Score(0.75),
-        "format": Score(1.0),
-    },
-)
-```
-
-## Applying a rubric
-
-`RubricGrader` applies a scorer to every criterion and combines the component
-scores. A default scorer can handle every criterion while overrides handle
-deterministic or specialized checks:
-
-```python
-from rolloutlib.graders import RubricGrader
-
-grader = RubricGrader(
-    llm_criterion_scorer,
-    input_space=grading_input_space,
-    overrides={"correctness": exact_answer_scorer},
-)
-
-score = grader.grade(input, rubric=rubric)
-```
-
-The default aggregation is a weighted mean. `weighted_sum`, `all_pass`,
-`asymmetric_mean`, and custom aggregation callables are available.
-`AsyncRubricGrader` supports sync or async criterion scorers and evaluates
-independent criteria concurrently.
-
-Aggregation is an implementation concern rather than part of the portable
-rubric schema. This permits explicit weighted scoring, holistic model grading,
-vetoes, penalties, and optimizer-specific reward shaping to use the same
-rubric.
-
-## Model-mediated grading
-
-An LLM-mediated grader is not a separate grading contract. It is ordinarily an
-`AsyncCallableGrader` whose callable renders a request, invokes an
-application-owned model client, and parses the result into a `Score`:
-
-```python
-from rolloutlib.graders import AsyncCallableGrader
-
-
-async def grade_with_judge(input: GradingInput, rubric: Rubric | None) -> Score:
-    request = render_judge_request(input, rubric)
-    response = await call_judge_model(request)  # application-owned
-    return parse_judge_response(response)
-
-
-grader = AsyncCallableGrader(
-    grade_with_judge,
-    input_space=grading_input_space,
-)
-```
-
-This keeps provider SDKs, model selection, prompts, sampling settings, retries,
-caching, structured outputs, and tracing in the application that owns them.
-Rolloutlib supplies the shared input validation, rubric handling, and score
-contract. The same pattern works for a hosted model, local inference, a
-multimodal judge, or a sequence of several model calls.
-
-Model graders should be calibrated against human judgments and adversarial
-examples before their scores are used as rewards. Detailed, independently
-assessable criteria improve diagnosis, but they do not make an unreliable judge
-safe automatically.
+- [Rubrics and rubric graders](../graders/rubrics.md)
+- [Reward graders](../graders/reward-graders.md)
+- [Composite graders](../graders/composite-graders.md)
+- [Scores and aggregation](../graders/scores-and-aggregation.md)
+- [Representative examples](../graders/examples.md)
+- [Grader API reference](../api.md#graders)

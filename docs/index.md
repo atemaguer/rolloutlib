@@ -34,9 +34,15 @@ trajectory; the same trajectory can be adapted to different optimizers.
 - [Spaces](concepts/spaces.md) describe valid observations, actions, and grader
   inputs.
 - [Policies and rollouts](concepts/rollouts.md) sample and record interactions.
-- [Graders and rubrics](concepts/graders.md) define portable grading signals.
+- [Graders](concepts/graders.md) define portable, composable grading signals.
 - [Datasets and evaluation](concepts/datasets-and-evaluation.md) organize work
   and benchmark task behavior.
+
+The grader documentation includes focused guides to
+[rubrics](graders/rubrics.md), [programmatic rewards](graders/reward-graders.md),
+[composition](graders/composite-graders.md), [structured
+scores](graders/scores-and-aggregation.md), and [representative
+examples](graders/examples.md).
 
 Start with [Getting started](getting-started.md) for installation and a small
 end-to-end example. Use the [API reference](api.md) when implementing against a
