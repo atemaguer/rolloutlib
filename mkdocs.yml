@@ -48,7 +48,7 @@ nav:
   - Concepts:
       - Environments: concepts/environments.md
       - Spaces: concepts/spaces.md
-      - Policies and rollouts: concepts/rollouts.md
+      - Policies: concepts/rollouts.md
       - Graders:
           - Overview: concepts/graders.md
           - Rubrics and rubric graders: graders/rubrics.md

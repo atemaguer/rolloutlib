@@ -1,4 +1,4 @@
-# Policies and rollouts
+# Policies
 
 A policy chooses an action from an observation. A rollout records what happened
 when a policy interacted with an environment.

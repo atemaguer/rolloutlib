@@ -42,7 +42,7 @@ logic for every backend.
 - [Environments](concepts/environments.md) define tasks and state transitions.
 - [Spaces](concepts/spaces.md) describe valid observations, actions, and grader
   inputs.
-- [Policies and rollouts](concepts/rollouts.md) sample and record interactions.
+- [Policies](concepts/rollouts.md) sample and record interactions.
 - [Graders](concepts/graders.md) define portable, composable grading signals.
 - [Evaluations](concepts/evaluations.md) run user-provided examples and
   aggregate task behavior.
