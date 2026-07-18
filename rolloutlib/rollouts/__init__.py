@@ -13,12 +13,10 @@ from .core import (
     Step,
     Trajectory,
     TrajectoryGroup,
-    abatched_rollout_group,
     arollout,
     arollout_group,
     rollout,
     rollout_group,
-    vector_rollout_group,
 )
 
 __all__ = [
@@ -34,10 +32,8 @@ __all__ = [
     "Step",
     "Trajectory",
     "TrajectoryGroup",
-    "abatched_rollout_group",
     "arollout",
     "arollout_group",
     "rollout",
     "rollout_group",
-    "vector_rollout_group",
 ]

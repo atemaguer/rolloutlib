@@ -51,36 +51,36 @@ concurrency across independent environment instances.
 
 ## Batched group collection
 
-`vector_rollout_group` uses Gymnasium's `SyncVectorEnv` and makes one batch
-policy call per vector step. It fits single-turn RL groups and environments
-whose members have the same horizon. Gymnasium vector environments advance
-every slot together, so this collector raises a clear error when one episode
-finishes before another.
+`rollout_group` accepts either its existing scalar `policy` or a
+`batch_policy`. With a batch policy, it begins collection through Gymnasium's
+`SyncVectorEnv` and makes one policy call per active wave. When vector slots
+finish at different times, rolloutlib transparently continues the unfinished
+underlying environments.
 
 ```python
-group = vector_rollout_group(
+group = rollout_group(
     item,
     make_env,
-    batch_policy,
+    batch_policy=batch_policy,
     num_rollouts=8,
 )
 ```
 
-`abatched_rollout_group` supports uneven multi-step episodes. Each wave sends
-the observations of unfinished environments to the async batch policy,
-concurrently steps those environments, and removes completed slots from the
-next wave.
+`arollout_group` provides the corresponding async path. Each wave sends the
+observations of unfinished environments to the batch policy, concurrently
+steps those environments, and removes completed slots from the next wave.
 
 ```python
-group = await abatched_rollout_group(
+group = await arollout_group(
     item,
     make_async_env,
-    async_batch_policy,
+    batch_policy=async_batch_policy,
     num_rollouts=8,
 )
 ```
 
 The first policy call receives eight observations. Later calls may receive
 fewer. Every call must return exactly one action or `PolicyOutput` per input
-observation. Environment resets and steps are bounded by `concurrency`; the
-batch policy controls model-side sampling and request batching.
+observation. Supplying both `policy` and `batch_policy`, or neither, is an
+error. Environment resets and steps are bounded by `concurrency`; the batch
+policy controls model-side sampling and request batching.

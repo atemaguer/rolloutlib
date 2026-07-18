@@ -14,21 +14,17 @@ from .envs import (
 )
 from .graders import AsyncGrader, Criterion, Grader, Level, Rubric, Score
 from .rollouts import (
-    AsyncBatchPolicy,
     AsyncPolicy,
-    BatchPolicy,
     Policy,
     PolicyOutput,
     RolloutError,
     Step,
     Trajectory,
     TrajectoryGroup,
-    abatched_rollout_group,
     arollout,
     arollout_group,
     rollout,
     rollout_group,
-    vector_rollout_group,
 )
 from .wrappers import (
     AsyncGradingWrapper,
@@ -43,12 +39,10 @@ __version__ = version("rolloutlib")
 
 __all__ = [
     "AsyncEnv",
-    "AsyncBatchPolicy",
     "AsyncGradingWrapper",
     "AsyncGrader",
     "AsyncPolicy",
     "AsyncSingleTurnEnv",
-    "BatchPolicy",
     "ChatObservationWrapper",
     "ChatHistoryWrapper",
     "Criterion",
@@ -67,7 +61,6 @@ __all__ = [
     "TrajectoryGroup",
     "ToolCallActionWrapper",
     "__version__",
-    "abatched_rollout_group",
     "as_async",
     "as_sync",
     "arollout",
@@ -84,5 +77,4 @@ __all__ = [
     "spaces",
     "wrappers",
     "wrap_language_env",
-    "vector_rollout_group",
 ]

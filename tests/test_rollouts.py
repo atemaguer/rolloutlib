@@ -12,12 +12,10 @@ from rolloutlib.envs import AsyncEnv
 from rolloutlib.graders import Score
 from rolloutlib.rollouts import (
     PolicyOutput,
-    abatched_rollout_group,
     arollout,
     arollout_group,
     rollout,
     rollout_group,
-    vector_rollout_group,
 )
 
 
@@ -249,7 +247,34 @@ def test_group_requires_positive_rollout_count() -> None:
         rollout_group(1, CountingEnv, lambda _: 0, num_rollouts=0)
 
 
-def test_vector_rollout_group_batches_policy_calls_and_preserves_slot_data() -> None:
+def test_group_requires_exactly_one_scalar_or_batch_policy() -> None:
+    with pytest.raises(ValueError, match="exactly one"):
+        rollout_group(1, CountingEnv)
+
+    with pytest.raises(ValueError, match="exactly one"):
+        rollout_group(
+            1,
+            CountingEnv,
+            lambda _: 0,
+            batch_policy=lambda observations: [0] * len(observations),
+        )
+
+    async def run() -> None:
+        with pytest.raises(ValueError, match="exactly one"):
+            await arollout_group(1, AsyncCountingEnv)
+
+        with pytest.raises(ValueError, match="exactly one"):
+            await arollout_group(
+                1,
+                AsyncCountingEnv,
+                lambda _: 0,
+                batch_policy=lambda observations: [0] * len(observations),
+            )
+
+    asyncio.run(run())
+
+
+def test_rollout_group_batches_policy_calls_and_preserves_slot_data() -> None:
     environments: list[CountingEnv] = []
     batch_sizes: list[int] = []
 
@@ -270,10 +295,10 @@ def test_vector_rollout_group_batches_policy_calls_and_preserves_slot_data() -> 
             for index, observation in enumerate(observations)
         ]
 
-    group = vector_rollout_group(
+    group = rollout_group(
         2,
         make_env,
-        policy,
+        batch_policy=policy,
         num_rollouts=3,
         item_id="vector-2",
     )
@@ -298,26 +323,32 @@ def test_vector_rollout_group_batches_policy_calls_and_preserves_slot_data() -> 
     assert all(environment.closed for environment in environments)
 
 
-def test_vector_rollout_group_rejects_uneven_episode_lengths_and_closes() -> None:
+def test_rollout_group_handles_uneven_batch_episode_lengths() -> None:
     environments: list[CountingEnv] = []
+    batch_sizes: list[int] = []
 
     def make_env(_: None) -> CountingEnv:
         environment = CountingEnv(target=len(environments) + 1)
         environments.append(environment)
         return environment
 
-    with pytest.raises(RuntimeError, match="abatched_rollout_group"):
-        vector_rollout_group(
-            None,
-            make_env,
-            lambda observations: [0] * len(observations),
-            num_rollouts=2,
-        )
+    def policy(observations: Sequence[int]) -> list[int]:
+        batch_sizes.append(len(observations))
+        return [0] * len(observations)
 
+    group = rollout_group(
+        None,
+        make_env,
+        batch_policy=policy,
+        num_rollouts=2,
+    )
+
+    assert batch_sizes == [2, 1]
+    assert [len(trajectory) for trajectory in group.trajectories] == [1, 2]
     assert all(environment.closed for environment in environments)
 
 
-def test_vector_rollout_group_batches_language_spaces() -> None:
+def test_rollout_group_batches_language_spaces() -> None:
     class LanguageEnv(gym.Env[Any, str]):
         observation_space = spaces.messages.chat(min_length=1)
         action_space = spaces.Text(min_length=1)
@@ -339,10 +370,10 @@ def test_vector_rollout_group_batches_language_spaces() -> None:
             observation = [{"role": "assistant", "content": action}]
             return observation, 1.0, True, False, {"answer": action}
 
-    group = vector_rollout_group(
+    group = rollout_group(
         None,
         lambda _: LanguageEnv(),
-        lambda observations: ["move"] * len(observations),
+        batch_policy=lambda observations: ["move"] * len(observations),
         num_rollouts=3,
     )
 
@@ -358,7 +389,7 @@ def test_vector_rollout_group_batches_language_spaces() -> None:
     ]
 
 
-def test_vector_rollout_group_validates_batch_size_before_step() -> None:
+def test_rollout_group_validates_batch_size_before_step() -> None:
     environments: list[CountingEnv] = []
 
     def make_env(item: int) -> CountingEnv:
@@ -367,10 +398,10 @@ def test_vector_rollout_group_validates_batch_size_before_step() -> None:
         return environment
 
     with pytest.raises(ValueError, match="1 outputs for 2 observations"):
-        vector_rollout_group(
+        rollout_group(
             2,
             make_env,
-            lambda _: [0],
+            batch_policy=lambda _: [0],
             num_rollouts=2,
         )
 
@@ -378,7 +409,7 @@ def test_vector_rollout_group_validates_batch_size_before_step() -> None:
     assert all(environment.closed for environment in environments)
 
 
-def test_vector_rollout_group_closes_partial_group_when_factory_fails() -> None:
+def test_rollout_group_closes_partial_batch_when_factory_fails() -> None:
     environments: list[CountingEnv] = []
 
     def make_env(_: None) -> CountingEnv:
@@ -389,17 +420,17 @@ def test_vector_rollout_group_closes_partial_group_when_factory_fails() -> None:
         return environment
 
     with pytest.raises(RuntimeError, match="factory failed"):
-        vector_rollout_group(
+        rollout_group(
             None,
             make_env,
-            lambda observations: [0] * len(observations),
+            batch_policy=lambda observations: [0] * len(observations),
             num_rollouts=2,
         )
 
     assert environments[0].closed
 
 
-def test_abatched_rollout_group_shrinks_active_batches() -> None:
+def test_arollout_group_shrinks_active_batches() -> None:
     async def run() -> None:
         environments: list[AsyncCountingEnv] = []
         batch_sizes: list[int] = []
@@ -421,10 +452,10 @@ def test_abatched_rollout_group_shrinks_active_batches() -> None:
                 for index, observation in enumerate(observations)
             ]
 
-        group = await abatched_rollout_group(
+        group = await arollout_group(
             None,
             make_env,
-            policy,
+            batch_policy=policy,
             num_rollouts=3,
         )
 
@@ -442,7 +473,7 @@ def test_abatched_rollout_group_shrinks_active_batches() -> None:
     asyncio.run(run())
 
 
-def test_abatched_rollout_group_validates_actions_before_any_active_step() -> None:
+def test_arollout_group_validates_batch_actions_before_any_active_step() -> None:
     async def run() -> None:
         environments: list[AsyncCountingEnv] = []
 
@@ -452,10 +483,10 @@ def test_abatched_rollout_group_validates_actions_before_any_active_step() -> No
             return environment
 
         with pytest.raises(ValueError, match="policy action.*outside"):
-            await abatched_rollout_group(
+            await arollout_group(
                 None,
                 make_env,
-                lambda observations: [0, 3][: len(observations)],
+                batch_policy=lambda observations: [0, 3][: len(observations)],
                 num_rollouts=2,
             )
 
@@ -465,7 +496,7 @@ def test_abatched_rollout_group_validates_actions_before_any_active_step() -> No
     asyncio.run(run())
 
 
-def test_abatched_rollout_group_bounds_async_environment_creation() -> None:
+def test_arollout_group_bounds_batched_async_environment_creation() -> None:
     async def run() -> None:
         active_creations = 0
         maximum_creations = 0
@@ -478,10 +509,10 @@ def test_abatched_rollout_group_bounds_async_environment_creation() -> None:
             active_creations -= 1
             return AsyncCountingEnv(target=1)
 
-        await abatched_rollout_group(
+        await arollout_group(
             None,
             make_env,
-            lambda observations: [0] * len(observations),
+            batch_policy=lambda observations: [0] * len(observations),
             num_rollouts=4,
             concurrency=2,
         )

@@ -25,9 +25,8 @@ import gymnasium as gym
 from rolloutlib.envs import AsyncEnv
 from rolloutlib.rollouts import (
     PolicyOutput,
-    abatched_rollout_group,
+    arollout_group,
     rollout_group,
-    vector_rollout_group,
 )
 
 
@@ -117,19 +116,19 @@ def controlled_benchmark(
         )
 
     def run_vector() -> None:
-        vector_rollout_group(
+        rollout_group(
             None,
             lambda _: OneTurnEnv(),
-            batch_policy,
+            batch_policy=batch_policy,
             num_rollouts=group_size,
         )
 
     def run_active() -> None:
         asyncio.run(
-            abatched_rollout_group(
+            arollout_group(
                 None,
                 lambda _: AsyncOneTurnEnv(),
-                async_batch_policy,
+                batch_policy=async_batch_policy,
                 num_rollouts=group_size,
             )
         )
@@ -299,10 +298,10 @@ def live_tinker_benchmark(
         ]
 
     def run_vector() -> None:
-        vector_rollout_group(
+        rollout_group(
             None,
             lambda _: OneTurnEnv(),
-            vector_policy,
+            batch_policy=vector_policy,
             num_rollouts=group_size,
         )
 
@@ -311,10 +310,10 @@ def live_tinker_benchmark(
 
     def run_active() -> None:
         asyncio.run(
-            abatched_rollout_group(
+            arollout_group(
                 None,
                 lambda _: AsyncOneTurnEnv(),
-                active_policy,
+                batch_policy=active_policy,
                 num_rollouts=group_size,
             )
         )

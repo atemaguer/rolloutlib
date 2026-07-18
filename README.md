@@ -222,41 +222,41 @@ core to a model backend. `terminated` and `truncated` retain Gymnasium’s disti
 fresh environments it creates. `arollout` and `arollout_group` provide async
 counterparts with bounded concurrency.
 
-For RL groups, rolloutlib also provides two batched collection paths. Use
-`vector_rollout_group` for single-turn or fixed-horizon groups whose members
-finish together. It constructs a Gymnasium `SyncVectorEnv` and calls the batch
-policy once per vector step:
+For RL groups, the same collectors also accept `batch_policy`. The synchronous
+collector begins through Gymnasium `SyncVectorEnv` and calls the batch policy
+once per active wave. If members finish at different times, it transparently
+continues only the unfinished environments:
 
 ```python
-from rolloutlib import vector_rollout_group
+from rolloutlib import rollout_group
 
-group = vector_rollout_group(
+group = rollout_group(
     item,
     make_env,
-    lambda observations: model.generate_batch(observations),
+    batch_policy=lambda observations: model.generate_batch(observations),
     num_rollouts=8,
 )
 ```
 
-Use `abatched_rollout_group` when episode lengths can differ. It calls the
-policy once with all currently active observations, removes completed slots,
-and continues with the remaining environments:
+The async collector follows the same interface. It concurrently steps active
+environments, removes completed slots, and continues with the remainder:
 
 ```python
-from rolloutlib import abatched_rollout_group
+from rolloutlib import arollout_group
 
-group = await abatched_rollout_group(
+group = await arollout_group(
     item,
     make_async_env,
-    async_batch_policy,
+    batch_policy=async_batch_policy,
     num_rollouts=8,
 )
 ```
 
-Both functions retain one `Trajectory` per environment and validate batch
-cardinality, declared spaces, returned actions, observations, rewards, and
-termination flags. The reproducible collector comparison lives in
-`benchmarks/rollout_group_throughput.py`.
+Each group function accepts exactly one of the existing scalar `policy`
+argument and `batch_policy`. Both modes retain one `Trajectory` per environment
+and validate batch cardinality, declared spaces, returned actions,
+observations, rewards, and termination flags. The reproducible collector
+comparison lives in `benchmarks/rollout_group_throughput.py`.
 
 Backend-specific policies are ordinary user code. For example, a Tinker
 policy can build a generation prompt with a Tinker renderer, call
