@@ -2,7 +2,9 @@
 
 from .core import (
     ActionT,
+    AsyncBatchPolicy,
     AsyncPolicy,
+    BatchPolicy,
     ItemT,
     ObservationT,
     Policy,
@@ -11,15 +13,19 @@ from .core import (
     Step,
     Trajectory,
     TrajectoryGroup,
+    abatched_rollout_group,
     arollout,
     arollout_group,
     rollout,
     rollout_group,
+    vector_rollout_group,
 )
 
 __all__ = [
     "ActionT",
+    "AsyncBatchPolicy",
     "AsyncPolicy",
+    "BatchPolicy",
     "ItemT",
     "ObservationT",
     "Policy",
@@ -28,8 +34,10 @@ __all__ = [
     "Step",
     "Trajectory",
     "TrajectoryGroup",
+    "abatched_rollout_group",
     "arollout",
     "arollout_group",
     "rollout",
     "rollout_group",
+    "vector_rollout_group",
 ]

@@ -222,6 +222,42 @@ core to a model backend. `terminated` and `truncated` retain Gymnasium’s disti
 fresh environments it creates. `arollout` and `arollout_group` provide async
 counterparts with bounded concurrency.
 
+For RL groups, rolloutlib also provides two batched collection paths. Use
+`vector_rollout_group` for single-turn or fixed-horizon groups whose members
+finish together. It constructs a Gymnasium `SyncVectorEnv` and calls the batch
+policy once per vector step:
+
+```python
+from rolloutlib import vector_rollout_group
+
+group = vector_rollout_group(
+    item,
+    make_env,
+    lambda observations: model.generate_batch(observations),
+    num_rollouts=8,
+)
+```
+
+Use `abatched_rollout_group` when episode lengths can differ. It calls the
+policy once with all currently active observations, removes completed slots,
+and continues with the remaining environments:
+
+```python
+from rolloutlib import abatched_rollout_group
+
+group = await abatched_rollout_group(
+    item,
+    make_async_env,
+    async_batch_policy,
+    num_rollouts=8,
+)
+```
+
+Both functions retain one `Trajectory` per environment and validate batch
+cardinality, declared spaces, returned actions, observations, rewards, and
+termination flags. The reproducible collector comparison lives in
+`benchmarks/rollout_group_throughput.py`.
+
 Backend-specific policies are ordinary user code. For example, a Tinker
 policy can build a generation prompt with a Tinker renderer, call
 `SamplingClient.sample` (or `sample_async`), parse the returned tokens, and

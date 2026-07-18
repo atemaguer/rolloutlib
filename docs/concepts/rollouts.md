@@ -48,3 +48,39 @@ the group collectors own and close those fresh environments.
 `TrajectoryGroup.scores` retains structured scores. `TrajectoryGroup.rewards`
 provides their scalar values for optimizer adapters. Async groups bound
 concurrency across independent environment instances.
+
+## Batched group collection
+
+`vector_rollout_group` uses Gymnasium's `SyncVectorEnv` and makes one batch
+policy call per vector step. It fits single-turn RL groups and environments
+whose members have the same horizon. Gymnasium vector environments advance
+every slot together, so this collector raises a clear error when one episode
+finishes before another.
+
+```python
+group = vector_rollout_group(
+    item,
+    make_env,
+    batch_policy,
+    num_rollouts=8,
+)
+```
+
+`abatched_rollout_group` supports uneven multi-step episodes. Each wave sends
+the observations of unfinished environments to the async batch policy,
+concurrently steps those environments, and removes completed slots from the
+next wave.
+
+```python
+group = await abatched_rollout_group(
+    item,
+    make_async_env,
+    async_batch_policy,
+    num_rollouts=8,
+)
+```
+
+The first policy call receives eight observations. Later calls may receive
+fewer. Every call must return exactly one action or `PolicyOutput` per input
+observation. Environment resets and steps are bounded by `concurrency`; the
+batch policy controls model-side sampling and request batching.

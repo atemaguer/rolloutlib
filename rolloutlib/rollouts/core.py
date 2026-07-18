@@ -16,6 +16,8 @@ from typing import Any, Generic, Protocol, TypeVar, cast
 
 import gymnasium as gym
 import numpy as np
+from gymnasium.vector import AutoresetMode, SyncVectorEnv
+from gymnasium.vector.utils import concatenate, create_empty_array, iterate
 
 from ..envs import AsyncEnv
 from ..graders import Score
@@ -115,6 +117,29 @@ class AsyncPolicy(Protocol[PolicyObservationT, PolicyActionT]):
         Returns:
             An action, :class:`PolicyOutput`, or awaitable resolving to one.
         """
+        ...
+
+
+class BatchPolicy(Protocol[PolicyObservationT, PolicyActionT]):
+    """Synchronous mapping from a batch of observations to matching actions."""
+
+    def __call__(
+        self, observations: Sequence[PolicyObservationT], /
+    ) -> Sequence[PolicyActionT | PolicyOutput[PolicyActionT]]:
+        """Return exactly one action or structured output per observation."""
+        ...
+
+
+class AsyncBatchPolicy(Protocol[PolicyObservationT, PolicyActionT]):
+    """Async-compatible mapping from active observations to matching actions."""
+
+    def __call__(
+        self, observations: Sequence[PolicyObservationT], /
+    ) -> (
+        Sequence[PolicyActionT | PolicyOutput[PolicyActionT]]
+        | Awaitable[Sequence[PolicyActionT | PolicyOutput[PolicyActionT]]]
+    ):
+        """Return exactly one action or structured output per observation."""
         ...
 
 
@@ -376,6 +401,69 @@ def _policy_info(output: PolicyOutput[Any]) -> dict[str, Any]:
     if output.stop_reason is not None:
         info.setdefault("stop_reason", output.stop_reason)
     return info
+
+
+def _batch_policy_outputs(value: object, *, expected: int) -> tuple[PolicyOutput[Any], ...]:
+    """Normalize one policy result per observation in a batch."""
+    if inspect.isawaitable(value):
+        close = getattr(value, "close", None)
+        if callable(close):
+            close()
+        raise TypeError("synchronous batch policies must return actions")
+    if isinstance(value, (str, bytes, Mapping)):
+        raise TypeError("batch policy must return a sequence of actions")
+    try:
+        outputs = tuple(_normalize_policy_output(item) for item in cast(Any, value))
+    except TypeError as error:
+        raise TypeError("batch policy must return a sequence of actions") from error
+    if len(outputs) != expected:
+        raise ValueError(
+            f"batch policy returned {len(outputs)} outputs for {expected} observations"
+        )
+    return outputs
+
+
+def _split_vector_values(
+    batch_space: gym.Space[Any],
+    values: object,
+) -> tuple[Any, ...]:
+    """Split a Gymnasium vector-space value into its per-environment values."""
+    try:
+        return tuple(iterate(batch_space, values))
+    except (TypeError, ValueError) as error:
+        raise TypeError("vector environment returned an invalid batched value") from error
+
+
+def _split_vector_info(
+    info: Mapping[str, Any],
+    num_envs: int,
+) -> tuple[dict[str, Any], ...]:
+    """Convert Gymnasium's masked vector-info mapping into per-environment info."""
+    result = [dict() for _ in range(num_envs)]
+    for key, value in info.items():
+        if key.startswith("_"):
+            continue
+        mask_value = info.get(f"_{key}", np.ones(num_envs, dtype=np.bool_))
+        mask = np.asarray(mask_value, dtype=np.bool_)
+        if mask.shape != (num_envs,):
+            raise ValueError(f"vector info mask for {key!r} must have shape ({num_envs},)")
+        if isinstance(value, Mapping):
+            nested = _split_vector_info(value, num_envs)
+            for index in range(num_envs):
+                if mask[index]:
+                    result[index][key] = nested[index]
+            continue
+        try:
+            if len(value) != num_envs:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"vector info value for {key!r} must have one entry per environment"
+            ) from None
+        for index in range(num_envs):
+            if mask[index]:
+                result[index][key] = value[index]
+    return tuple(result)
 
 
 def _check_composition(
@@ -682,6 +770,232 @@ def rollout_group(
     )
 
 
+def vector_rollout_group(
+    item: ItemT,
+    make_env: Callable[[ItemT], gym.Env[ObservationT, ActionT]],
+    policy: BatchPolicy[ObservationT, ActionT],
+    *,
+    num_rollouts: int = 1,
+    item_id: str | None = None,
+    seed: int | Sequence[int] | None = None,
+    options: dict[str, Any] | None = None,
+    max_steps: int | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> TrajectoryGroup[ItemT, ObservationT, ActionT]:
+    """Collect a synchronized group through Gymnasium ``SyncVectorEnv``.
+
+    This collector makes one policy call for the full group at each step. It is
+    ideal for single-turn RL groups and fixed-horizon environments. If one
+    environment finishes before the rest, use :func:`abatched_rollout_group`,
+    which keeps only unfinished environments in subsequent policy batches.
+
+    Args:
+        item: Input item used to create every environment in the group.
+        make_env: Factory returning a fresh Gymnasium environment for ``item``.
+        policy: Callable mapping a sequence of observations to equally many
+            actions or :class:`PolicyOutput` instances.
+        num_rollouts: Number of vector-environment slots and trajectories.
+        item_id: Optional stable identifier for the item.
+        seed: Optional scalar seed or one seed per vector slot.
+        options: Optional reset options passed to every environment.
+        max_steps: Optional shared action limit.
+        metadata: Optional metadata attached to the trajectory group.
+
+    Returns:
+        A trajectory group in vector-slot order.
+
+    Raises:
+        RuntimeError: If environments finish on different vector steps.
+        ValueError: If counts, limits, policy outputs, or Gymnasium values are
+            invalid.
+    """
+    if num_rollouts < 1:
+        raise ValueError("num_rollouts must be at least 1")
+    if max_steps is not None and max_steps < 0:
+        raise ValueError("max_steps must be non-negative")
+
+    environments: list[gym.Env[ObservationT, ActionT]] = []
+    vector_environment: SyncVectorEnv | None = None
+    try:
+        for _ in range(num_rollouts):
+            environments.append(make_env(item))
+        vector_environment = SyncVectorEnv(
+            [lambda environment=environment: environment for environment in environments],
+            autoreset_mode=AutoresetMode.DISABLED,
+        )
+        for environment in environments:
+            _check_composition(environment, policy)
+
+        reset_seed = (
+            list(seed)
+            if isinstance(seed, Sequence) and not isinstance(seed, (str, bytes))
+            else seed
+        )
+        batched_observations, batched_initial_info = vector_environment.reset(
+            seed=cast(int | list[int | None] | None, reset_seed),
+            options=options,
+        )
+        observations = cast(
+            tuple[ObservationT, ...],
+            _split_vector_values(
+                vector_environment.observation_space,
+                batched_observations,
+            ),
+        )
+        if not isinstance(batched_initial_info, Mapping):
+            raise TypeError("vector environment reset info must be a mapping")
+        initial_infos = _split_vector_info(batched_initial_info, num_rollouts)
+        for environment, observation, info in zip(
+            environments,
+            observations,
+            initial_infos,
+            strict=True,
+        ):
+            _check_reset_result(environment, observation, info)
+
+        initial_observations = observations
+        steps: list[list[Step[ObservationT, ActionT]]] = [
+            [] for _ in range(num_rollouts)
+        ]
+        terminations = [False] * num_rollouts
+        truncations = [False] * num_rollouts
+
+        while not all(
+            terminated or truncated
+            for terminated, truncated in zip(
+                terminations,
+                truncations,
+                strict=True,
+            )
+        ):
+            if max_steps is not None and len(steps[0]) >= max_steps:
+                truncations = [True] * num_rollouts
+                break
+
+            outputs = _batch_policy_outputs(
+                policy(observations),
+                expected=num_rollouts,
+            )
+            actions: list[ActionT] = []
+            for environment, output in zip(environments, outputs, strict=True):
+                check_space_value(
+                    environment.action_space,
+                    output.action,
+                    name="policy action",
+                )
+                actions.append(cast(ActionT, output.action))
+            batched_actions = concatenate(
+                vector_environment.single_action_space,
+                actions,
+                create_empty_array(
+                    vector_environment.single_action_space,
+                    n=num_rollouts,
+                ),
+            )
+            (
+                batched_next_observations,
+                rewards,
+                terminated_values,
+                truncated_values,
+                batched_info,
+            ) = vector_environment.step(batched_actions)
+            next_observations = cast(
+                tuple[ObservationT, ...],
+                _split_vector_values(
+                    vector_environment.observation_space,
+                    batched_next_observations,
+                ),
+            )
+            infos = _split_vector_info(batched_info, num_rollouts)
+            terminations = [bool(value) for value in terminated_values]
+            truncations = [bool(value) for value in truncated_values]
+            for index, (
+                environment,
+                observation,
+                output,
+                action,
+                next_observation,
+                reward,
+                terminated,
+                truncated,
+                info,
+            ) in enumerate(
+                zip(
+                    environments,
+                    observations,
+                    outputs,
+                    actions,
+                    next_observations,
+                    rewards,
+                    terminations,
+                    truncations,
+                    infos,
+                    strict=True,
+                )
+            ):
+                _check_step_result(
+                    environment,
+                    next_observation,
+                    reward,
+                    terminated,
+                    truncated,
+                    info,
+                )
+                steps[index].append(
+                    Step(
+                        observation=observation,
+                        action=action,
+                        reward=reward,
+                        next_observation=next_observation,
+                        terminated=terminated,
+                        truncated=truncated,
+                        info=info,
+                        policy_info=_policy_info(output),
+                        policy_tokens=output.tokens,
+                        policy_logprobs=output.logprobs,
+                        policy_stop_reason=output.stop_reason,
+                    )
+                )
+            observations = next_observations
+            complete = [
+                terminated or truncated
+                for terminated, truncated in zip(
+                    terminations,
+                    truncations,
+                    strict=True,
+                )
+            ]
+            if any(complete) and not all(complete):
+                raise RuntimeError(
+                    "vector_rollout_group requires synchronized episode endings; "
+                    "use abatched_rollout_group for uneven episode lengths"
+                )
+
+        trajectories = [
+            Trajectory(
+                initial_observation=initial_observations[index],
+                steps=member_steps,
+                initial_info=initial_infos[index],
+                terminated=terminations[index],
+                truncated=truncations[index],
+            )
+            for index, member_steps in enumerate(steps)
+        ]
+    finally:
+        if vector_environment is not None:
+            vector_environment.close()
+        else:
+            for environment in environments:
+                environment.close()
+
+    return TrajectoryGroup(
+        item=item,
+        item_id=item_id or "0",
+        trajectories=trajectories,
+        metadata=metadata or {},
+    )
+
+
 async def arollout_group(
     item: ItemT,
     make_env: Callable[[ItemT], AsyncEnv[ObservationT, ActionT] | Awaitable[AsyncEnv[ObservationT, ActionT]]],
@@ -744,9 +1058,226 @@ async def arollout_group(
     )
 
 
+async def abatched_rollout_group(
+    item: ItemT,
+    make_env: Callable[
+        [ItemT],
+        AsyncEnv[ObservationT, ActionT]
+        | Awaitable[AsyncEnv[ObservationT, ActionT]],
+    ],
+    policy: AsyncBatchPolicy[ObservationT, ActionT],
+    *,
+    num_rollouts: int = 1,
+    item_id: str | None = None,
+    max_steps: int | None = None,
+    concurrency: int | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> TrajectoryGroup[ItemT, ObservationT, ActionT]:
+    """Collect uneven async episodes with one policy call per active wave.
+
+    Finished environments leave the next policy batch while unfinished ones
+    continue. Environment reset and step calls run concurrently, bounded by
+    ``concurrency``; model sampling remains under the batch policy's control.
+
+    Args:
+        item: Input item used to create every environment in the group.
+        make_env: Sync or async factory returning a fresh async environment.
+        policy: Async-compatible callable returning one action per active
+            observation.
+        num_rollouts: Number of trajectories in the group.
+        item_id: Optional stable identifier for the item.
+        max_steps: Optional per-trajectory action limit.
+        concurrency: Maximum concurrent environment resets or steps. ``None``
+            permits all group members to run concurrently.
+        metadata: Optional metadata attached to the trajectory group.
+
+    Returns:
+        A trajectory group in environment-creation order.
+    """
+    if num_rollouts < 1:
+        raise ValueError("num_rollouts must be at least 1")
+    if max_steps is not None and max_steps < 0:
+        raise ValueError("max_steps must be non-negative")
+    if concurrency is not None and concurrency < 1:
+        raise ValueError("concurrency must be at least 1")
+    semaphore = asyncio.Semaphore(concurrency or num_rollouts)
+
+    async def bounded(awaitable: Awaitable[Any]) -> Any:
+        async with semaphore:
+            return await awaitable
+
+    async def create_one() -> AsyncEnv[ObservationT, ActionT]:
+        async with semaphore:
+            environment = make_env(item)
+            if inspect.isawaitable(environment):
+                environment = await environment
+            return environment
+
+    environments: list[AsyncEnv[ObservationT, ActionT]] = []
+    try:
+        creation_results = await asyncio.gather(
+            *(create_one() for _ in range(num_rollouts)),
+            return_exceptions=True,
+        )
+        creation_error: BaseException | None = None
+        for result in creation_results:
+            if isinstance(result, BaseException):
+                if creation_error is None:
+                    creation_error = result
+            else:
+                environments.append(result)
+        if creation_error is not None:
+            raise creation_error
+
+        for environment in environments:
+            _check_composition(environment, policy)
+
+        first_environment = environments[0]
+        for index, environment in enumerate(environments[1:], start=1):
+            check_space_compatibility(
+                first_environment.observation_space,
+                environment.observation_space,
+                produced_name="environment 0 observation_space",
+                accepted_name=f"environment {index} observation_space",
+            )
+            check_space_compatibility(
+                environment.observation_space,
+                first_environment.observation_space,
+                produced_name=f"environment {index} observation_space",
+                accepted_name="environment 0 observation_space",
+            )
+            check_space_compatibility(
+                first_environment.action_space,
+                environment.action_space,
+                produced_name="environment 0 action_space",
+                accepted_name=f"environment {index} action_space",
+            )
+            check_space_compatibility(
+                environment.action_space,
+                first_environment.action_space,
+                produced_name=f"environment {index} action_space",
+                accepted_name="environment 0 action_space",
+            )
+
+        reset_results = await asyncio.gather(
+            *(bounded(environment.reset()) for environment in environments)
+        )
+        observations: list[ObservationT] = []
+        initial_infos: list[dict[str, Any]] = []
+        for environment, (observation, info) in zip(
+            environments,
+            reset_results,
+            strict=True,
+        ):
+            _check_reset_result(environment, observation, info)
+            observations.append(observation)
+            initial_infos.append(info)
+        initial_observations = list(observations)
+        steps: list[list[Step[ObservationT, ActionT]]] = [
+            [] for _ in range(num_rollouts)
+        ]
+        terminations = [False] * num_rollouts
+        truncations = [False] * num_rollouts
+
+        while True:
+            for index in range(num_rollouts):
+                if (
+                    not terminations[index]
+                    and not truncations[index]
+                    and max_steps is not None
+                    and len(steps[index]) >= max_steps
+                ):
+                    truncations[index] = True
+            active = [
+                index
+                for index in range(num_rollouts)
+                if not (terminations[index] or truncations[index])
+            ]
+            if not active:
+                break
+
+            active_observations = tuple(observations[index] for index in active)
+            value = policy(active_observations)
+            if inspect.isawaitable(value):
+                value = await value
+            outputs = _batch_policy_outputs(value, expected=len(active))
+            actions: list[ActionT] = []
+            for index, output in zip(active, outputs, strict=True):
+                check_space_value(
+                    environments[index].action_space,
+                    output.action,
+                    name="policy action",
+                )
+                actions.append(cast(ActionT, output.action))
+
+            step_results = await asyncio.gather(
+                *(
+                    bounded(environments[index].step(action))
+                    for index, action in zip(active, actions, strict=True)
+                )
+            )
+            for index, output, action, result in zip(
+                active,
+                outputs,
+                actions,
+                step_results,
+                strict=True,
+            ):
+                next_observation, reward, terminated, truncated, info = result
+                _check_step_result(
+                    environments[index],
+                    next_observation,
+                    reward,
+                    terminated,
+                    truncated,
+                    info,
+                )
+                steps[index].append(
+                    Step(
+                        observation=observations[index],
+                        action=action,
+                        reward=reward,
+                        next_observation=next_observation,
+                        terminated=terminated,
+                        truncated=truncated,
+                        info=info,
+                        policy_info=_policy_info(output),
+                        policy_tokens=output.tokens,
+                        policy_logprobs=output.logprobs,
+                        policy_stop_reason=output.stop_reason,
+                    )
+                )
+                observations[index] = next_observation
+                terminations[index] = bool(terminated)
+                truncations[index] = bool(truncated)
+
+        trajectories = [
+            Trajectory(
+                initial_observation=initial_observations[index],
+                steps=member_steps,
+                initial_info=initial_infos[index],
+                terminated=terminations[index],
+                truncated=truncations[index],
+            )
+            for index, member_steps in enumerate(steps)
+        ]
+    finally:
+        if environments:
+            await asyncio.gather(*(environment.close() for environment in environments))
+
+    return TrajectoryGroup(
+        item=item,
+        item_id=item_id or "0",
+        trajectories=trajectories,
+        metadata=metadata or {},
+    )
+
+
 __all__ = [
     "ActionT",
+    "AsyncBatchPolicy",
     "AsyncPolicy",
+    "BatchPolicy",
     "ItemT",
     "ObservationT",
     "Policy",
@@ -755,8 +1286,10 @@ __all__ = [
     "Step",
     "Trajectory",
     "TrajectoryGroup",
+    "abatched_rollout_group",
     "arollout",
     "arollout_group",
     "rollout",
     "rollout_group",
+    "vector_rollout_group",
 ]
