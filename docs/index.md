@@ -1,12 +1,17 @@
 # rolloutlib
 
-Rolloutlib defines small, composable interfaces for agentic and language-model
-reinforcement-learning post-training.
+Rolloutlib is a collection of interoperable Python libraries for agentic
+reinforcement-learning (RL) post-training.
 
-The library standardizes the boundaries between a task, a policy, a recorded
-interaction, and a grading signal. It deliberately leaves model sampling,
-optimization algorithms, distributed execution, and backend-specific training
-records to the systems that own them.
+It defines standard APIs for the interactive part of agentic RL: environments
+define tasks and state transitions; multimodal spaces describe observations and
+actions; policies sample language-model actions; rollout runners record
+trajectories; and graders produce reward and evaluation signals.
+
+These contracts keep task, trajectory, and reward semantics portable across
+model providers, rollout workers, RL trainers, and evaluation harnesses.
+Existing Gymnasium environments remain normal Gymnasium environments, and
+language-facing wrappers and policies compose around them.
 
 ## The interaction model
 
@@ -16,7 +21,7 @@ input and turns an action, trajectory, tool trace, or other application value
 into a structured score.
 
 ```text
-dataset item
+task example
     → fresh environment
     → policy actions
     → trajectory
@@ -28,6 +33,10 @@ These pieces stay independent. The same environment can be used for evaluation
 or training; the same grader can grade a single response or a collected
 trajectory; the same trajectory can be adapted to different optimizers.
 
+That separation is the core interoperability promise: integrations translate
+at stable boundaries instead of reimplementing the task, agent loop, or grading
+logic for every backend.
+
 ## Concepts
 
 - [Environments](concepts/environments.md) define tasks and state transitions.
@@ -35,8 +44,8 @@ trajectory; the same trajectory can be adapted to different optimizers.
   inputs.
 - [Policies and rollouts](concepts/rollouts.md) sample and record interactions.
 - [Graders](concepts/graders.md) define portable, composable grading signals.
-- [Datasets and evaluation](concepts/datasets-and-evaluation.md) organize work
-  and benchmark task behavior.
+- [Evaluations](concepts/evaluations.md) run user-provided examples and
+  aggregate task behavior.
 
 The grader documentation includes focused guides to
 [rubrics](graders/rubrics.md), [programmatic rewards](graders/reward-graders.md),

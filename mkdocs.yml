@@ -1,5 +1,5 @@
 site_name: rolloutlib
-site_description: Gymnasium-style environments and rollout primitives for agentic RL post-training.
+site_description: Gymnasium-native infrastructure for agentic RL post-training.
 site_url: https://atemaguer.github.io/rolloutlib/
 repo_url: https://github.com/atemaguer/rolloutlib
 repo_name: atemaguer/rolloutlib
@@ -56,5 +56,5 @@ nav:
           - Composite graders: graders/composite-graders.md
           - Scores and aggregation: graders/scores-and-aggregation.md
           - Representative examples: graders/examples.md
-      - Datasets and evaluation: concepts/datasets-and-evaluation.md
+      - Evaluations: concepts/evaluations.md
   - API reference: api.md

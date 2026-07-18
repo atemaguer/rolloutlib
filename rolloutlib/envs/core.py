@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import math
 from typing import Any, Generic, TypeVar
 
 import gymnasium as gym
@@ -11,6 +12,7 @@ from gymnasium.spaces import Space
 from gymnasium.utils import seeding
 
 from ..graders import Score, ScoreValue
+from ..spaces.compatibility import check_space_value, require_space
 
 
 ObsT = TypeVar("ObsT")
@@ -34,11 +36,18 @@ def _resolve_evaluation(value: EvaluationResult) -> tuple[float, dict[str, Any]]
         result, info = value
     else:
         result, info = value, {}
+    if not isinstance(info, dict):
+        raise TypeError("evaluation info must be a dictionary")
     resolved_info = dict(info)
     if isinstance(result, Score):
         resolved_info.update(result.as_info())
         return result.value, resolved_info
-    return float(result), resolved_info
+    if isinstance(result, bool):
+        raise TypeError("evaluation score must be a finite number")
+    reward = float(result)
+    if not math.isfinite(reward):
+        raise ValueError("evaluation score must be finite")
+    return reward, resolved_info
 
 # A convenience alias, deliberately not a Rolloutlib subclass. Synchronous
 # implementations therefore retain exact Gymnasium identity and compatibility.
@@ -159,7 +168,16 @@ class SingleTurnEnv(gym.Env[ObsT, ActT], ABC):
             The observation and info produced by ``initial_observation``.
         """
         super().reset(seed=seed)
+        require_space(self.action_space, name="environment action_space")
+        require_space(self.observation_space, name="environment observation_space")
         observation, info = self.initial_observation(options=options)
+        check_space_value(
+            self.observation_space,
+            observation,
+            name="initial observation",
+        )
+        if not isinstance(info, dict):
+            raise TypeError("initial observation info must be a dictionary")
         self._episode_active = True
         return observation, info
 
@@ -173,8 +191,14 @@ class SingleTurnEnv(gym.Env[ObsT, ActT], ABC):
             A terminal Gymnasium five-tuple containing the evaluated reward.
         """
         self._require_active_episode()
+        check_space_value(self.action_space, action, name="environment action")
         reward, info = _resolve_evaluation(self.evaluate(action))
         observation = self.terminal_observation(action)
+        check_space_value(
+            self.observation_space,
+            observation,
+            name="terminal observation",
+        )
         self._episode_active = False
         return observation, reward, True, False, info
 
@@ -255,7 +279,16 @@ class AsyncSingleTurnEnv(AsyncEnv[ObsT, ActT], ABC):
             The observation and info produced by ``initial_observation``.
         """
         await super().reset(seed=seed, options=options)
+        require_space(self.action_space, name="environment action_space")
+        require_space(self.observation_space, name="environment observation_space")
         observation, info = await self.initial_observation(options=options)
+        check_space_value(
+            self.observation_space,
+            observation,
+            name="initial observation",
+        )
+        if not isinstance(info, dict):
+            raise TypeError("initial observation info must be a dictionary")
         self._episode_active = True
         return observation, info
 
@@ -271,8 +304,14 @@ class AsyncSingleTurnEnv(AsyncEnv[ObsT, ActT], ABC):
             A terminal Gymnasium five-tuple containing the evaluated reward.
         """
         self._require_active_episode()
+        check_space_value(self.action_space, action, name="environment action")
         reward, info = _resolve_evaluation(await self.evaluate(action))
         observation = await self.terminal_observation(action)
+        check_space_value(
+            self.observation_space,
+            observation,
+            name="terminal observation",
+        )
         self._episode_active = False
         return observation, reward, True, False, info
 

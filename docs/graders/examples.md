@@ -383,7 +383,6 @@ grader = RewardGrader(
 environment = wrappers.GradingWrapper(
     QuestionEnv(),
     grader=grader,
-    make_input=lambda env, action: action,
 )
 
 observation, reset_info = environment.reset()
@@ -406,7 +405,6 @@ inner signal should remain:
 environment = wrappers.GradingWrapper(
     QuestionEnv(),
     grader=grader,
-    make_input=lambda env, action: action,
     combine_reward=lambda environment_reward, score: (
         0.25 * environment_reward + 0.75 * score.value
     ),
@@ -479,17 +477,17 @@ by the application and follow the same pattern.
 
 ## Per-item rubrics
 
-When dataset items carry different rubrics, bind each rubric while constructing
-the task runtime:
+When examples carry different rubrics, bind each rubric while constructing the
+task runtime:
 
 ```python
-class DatasetItem(BaseModel):
+class EvaluationExample(BaseModel):
     prompt: str
     reference_answer: str
     rubric: Rubric
 
 
-def make_grader(item: DatasetItem, client: ModelClient):
+def make_grader(example: EvaluationExample, client: ModelClient):
     async def judge(input: GradingInput, rubric: Rubric):
         raw = await client.generate_json(render_request(input, rubric))
         parsed = JudgeResponse.model_validate_json(raw)
@@ -499,7 +497,7 @@ def make_grader(item: DatasetItem, client: ModelClient):
         }
 
     return AsyncRubricGrader(
-        item.rubric,
+        example.rubric,
         judge,
         input_space=grading_space,
     )

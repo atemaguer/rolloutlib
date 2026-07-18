@@ -352,3 +352,19 @@ def test_grader_contracts_are_nominal_and_enforce_input_spaces() -> None:
     with pytest.raises(ValueError, match="outside input_space"):
         grader.grade(42)  # type: ignore[arg-type]
     assert called is False
+
+
+def test_composite_grader_rejects_incompatible_child_input_spaces() -> None:
+    text_grader = RewardGrader(
+        {"length": lambda value: float(bool(value))},
+        input_space=gym.spaces.Text(max_length=20),
+    )
+
+    with pytest.raises(
+        TypeError,
+        match="composite input_space.*incompatible.*grader 'text' input_space",
+    ):
+        CompositeGrader(
+            {"text": text_grader},  # type: ignore[dict-item]
+            input_space=gym.spaces.Discrete(5),
+        )

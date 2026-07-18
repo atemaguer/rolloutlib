@@ -1,12 +1,17 @@
 # rolloutlib
 
-Gymnasium-style environments and rollout primitives for agentic RL
-post-training.
+Rolloutlib is a collection of interoperable Python libraries for agentic
+reinforcement-learning (RL) post-training.
 
-Rolloutlib keeps the small, composable contracts that make Gymnasium and Tinker
-useful: environments expose `reset`/`step` and spaces; rollout code records
-interactions; RL training systems can consume those records through their own
-backend-specific data adapters. Rolloutlib does not own model sampling.
+It defines standard APIs for the interactive part of agentic RL: environments
+define tasks and state transitions; multimodal spaces describe observations and
+actions; policies sample language-model actions; rollout runners record
+trajectories; and graders produce reward and evaluation signals.
+
+These contracts let the same task, trajectory, and reward semantics work across
+model providers, rollout workers, RL trainers, and evaluation harnesses.
+Rolloutlib is Gymnasium-native, so existing environments remain usable while
+wrappers expose their observations and actions to language agents.
 
 ## Install
 
@@ -69,6 +74,7 @@ environment = wrappers.GradingWrapper(
     ExistingEnv(item),
     grader=grader,
     make_input=lambda env, action: (item, env.state, action),
+    input_space=grader.input_space,
 )
 ```
 
@@ -221,26 +227,6 @@ policy can build a generation prompt with a Tinker renderer, call
 `SamplingClient.sample` (or `sample_async`), parse the returned tokens, and
 return `PolicyOutput`. This keeps Tinker optional while preserving the same
 rollout contract.
-
-## Datasets
-
-Datasets are sources of pre-rollout work, not collections of completed
-trajectories:
-
-```python
-from rolloutlib.datasets import Dataset, RLDataset
-
-items = Dataset([problem_a, problem_b], metadata={"split": "train"})
-rl_items = RLDataset(
-    [problem_a, problem_b],
-    make_env=lambda problem: ProblemEnv(problem),
-    get_item_id=lambda problem: problem.id,
-)
-```
-
-Batching, shuffling, repetition, and the number of rollouts per item remain
-training-loop concerns. Larger systems can provide their own sequence or
-streaming dataset without inheriting from these convenience containers.
 
 ## Graders
 
@@ -407,9 +393,12 @@ their conventional Hugging Face datasets.
 
 ## Scope
 
-Rolloutlib currently defines environment, space, rollout, grading, and
-evaluation contracts. Training operations and backend-specific adapters are
-future seams.
+Rolloutlib focuses on task definition and experience generation for agentic RL:
+sampling actions, recording trajectories, producing reward signals, and
+evaluating policies with the same environment semantics used during training.
+It does not implement optimization algorithms or a distributed training
+runtime. Model providers and RL trainers integrate at the policy and trajectory
+boundaries.
 
 ## Development
 

@@ -6,7 +6,7 @@ input.
 
 This separation lets the same rubric be:
 
-- stored with a dataset;
+- stored with task or evaluation configuration;
 - serialized and shared independently of code;
 - applied by different models or human reviewers;
 - aggregated differently for evaluation and training;
@@ -366,20 +366,20 @@ review, and multi-model ensembles to implement the same judge contract.
 The rubric is bound at construction, making the grader's policy explicit and
 preventing call sites from accidentally switching policies.
 
-If each dataset item has its own rubric, create a grader when constructing that
-item's environment:
+If each example has its own rubric, create a grader when constructing that
+example's environment:
 
 ```python
-def make_grader(item: DatasetItem) -> AsyncRubricGrader[GradingInput]:
+def make_grader(example: EvaluationExample) -> AsyncRubricGrader[GradingInput]:
     return AsyncRubricGrader(
-        item.rubric,
+        example.rubric,
         judge,
         input_space=grading_input_space,
     )
 ```
 
-This mirrors environment construction: dataset items configure fresh runtime
-objects rather than passing configuration through every operation.
+This mirrors environment construction: examples configure fresh runtime objects
+rather than passing configuration through every operation.
 
 ## Designing reliable rubrics
 

@@ -9,14 +9,21 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import math
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Generic, Protocol, TypeVar, cast
 
 import gymnasium as gym
+import numpy as np
 
 from ..envs import AsyncEnv
 from ..graders import Score
+from ..spaces.compatibility import (
+    check_space_compatibility,
+    check_space_value,
+    require_space,
+)
 
 
 ObservationT = TypeVar("ObservationT")
@@ -278,7 +285,7 @@ class RolloutError:
 
 @dataclass(frozen=True, slots=True)
 class TrajectoryGroup(Generic[ItemT, ObservationT, ActionT]):
-    """Trajectories collected for one source item."""
+    """Trajectories collected for one input item."""
 
     item: ItemT
     item_id: str
@@ -371,6 +378,96 @@ def _policy_info(output: PolicyOutput[Any]) -> dict[str, Any]:
     return info
 
 
+def _check_composition(
+    environment: Any,
+    policy: object,
+) -> None:
+    """Validate declared environment and policy spaces before a rollout."""
+
+    try:
+        observation_space = require_space(
+            environment.observation_space,
+            name="environment observation_space",
+        )
+        action_space = require_space(
+            environment.action_space,
+            name="environment action_space",
+        )
+    except AttributeError as error:
+        raise TypeError(
+            "environment must define action_space and observation_space"
+        ) from error
+
+    policy_observation_space = getattr(policy, "observation_space", None)
+    if policy_observation_space is not None:
+        policy_observation_space = require_space(
+            policy_observation_space,
+            name="policy observation_space",
+        )
+        check_space_compatibility(
+            observation_space,
+            policy_observation_space,
+            produced_name="environment observation_space",
+            accepted_name="policy observation_space",
+        )
+
+    policy_action_space = getattr(policy, "action_space", None)
+    if policy_action_space is not None:
+        policy_action_space = require_space(
+            policy_action_space,
+            name="policy action_space",
+        )
+        check_space_compatibility(
+            policy_action_space,
+            action_space,
+            produced_name="policy action_space",
+            accepted_name="environment action_space",
+        )
+
+
+def _check_reset_result(
+    environment: Any,
+    observation: object,
+    info: object,
+) -> None:
+    check_space_value(
+        environment.observation_space,
+        observation,
+        name="reset observation",
+    )
+    if not isinstance(info, dict):
+        raise TypeError("environment reset info must be a dictionary")
+
+
+def _check_step_result(
+    environment: Any,
+    observation: object,
+    reward: object,
+    terminated: object,
+    truncated: object,
+    info: object,
+) -> None:
+    check_space_value(
+        environment.observation_space,
+        observation,
+        name="step observation",
+    )
+    if isinstance(reward, bool):
+        raise TypeError("environment reward must be a finite number")
+    try:
+        scalar_reward = float(cast(Any, reward))
+    except (TypeError, ValueError) as error:
+        raise TypeError("environment reward must be a finite number") from error
+    if not math.isfinite(scalar_reward):
+        raise ValueError("environment reward must be finite")
+    if not isinstance(terminated, (bool, np.bool_)) or not isinstance(
+        truncated, (bool, np.bool_)
+    ):
+        raise TypeError("environment termination flags must be booleans")
+    if not isinstance(info, dict):
+        raise TypeError("environment step info must be a dictionary")
+
+
 def rollout(
     environment: gym.Env[ObservationT, ActionT],
     policy: Policy[ObservationT, ActionT],
@@ -400,7 +497,9 @@ def rollout(
 
     if max_steps is not None and max_steps < 0:
         raise ValueError("max_steps must be non-negative")
+    _check_composition(environment, policy)
     observation, initial_info = environment.reset(seed=seed, options=options)
+    _check_reset_result(environment, observation, initial_info)
     steps: list[Step[ObservationT, ActionT]] = []
     terminated = False
     truncated = False
@@ -409,8 +508,21 @@ def rollout(
             truncated = True
             break
         output = _sync_policy_output(policy(observation))
+        check_space_value(
+            environment.action_space,
+            output.action,
+            name="policy action",
+        )
         next_observation, reward, terminated, truncated, info = environment.step(
             cast(ActionT, output.action)
+        )
+        _check_step_result(
+            environment,
+            next_observation,
+            reward,
+            terminated,
+            truncated,
+            info,
         )
         steps.append(
             Step(
@@ -466,7 +578,9 @@ async def arollout(
 
     if max_steps is not None and max_steps < 0:
         raise ValueError("max_steps must be non-negative")
+    _check_composition(environment, policy)
     observation, initial_info = await environment.reset(seed=seed, options=options)
+    _check_reset_result(environment, observation, initial_info)
     steps: list[Step[ObservationT, ActionT]] = []
     terminated = False
     truncated = False
@@ -478,8 +592,21 @@ async def arollout(
         if inspect.isawaitable(value):
             value = await value
         output = _normalize_policy_output(value)
+        check_space_value(
+            environment.action_space,
+            output.action,
+            name="policy action",
+        )
         next_observation, reward, terminated, truncated, info = await environment.step(
             cast(ActionT, output.action)
+        )
+        _check_step_result(
+            environment,
+            next_observation,
+            reward,
+            terminated,
+            truncated,
+            info,
         )
         steps.append(
             Step(
@@ -520,7 +647,7 @@ def rollout_group(
     """Collect independent synchronous trajectories for one item.
 
     Args:
-        item: Dataset item used to create each environment.
+        item: Input item used to create each environment.
         make_env: Factory returning a fresh environment for ``item``.
         policy: Synchronous callable mapping observations to actions.
         num_rollouts: Number of independent trajectories to collect.
@@ -569,7 +696,7 @@ async def arollout_group(
     """Collect asynchronous trajectories for one item with bounded concurrency.
 
     Args:
-        item: Dataset item used to create each environment.
+        item: Input item used to create each environment.
         make_env: Sync or async factory returning a fresh async environment.
         policy: Async-compatible callable mapping observations to actions.
         num_rollouts: Number of independent trajectories to collect.

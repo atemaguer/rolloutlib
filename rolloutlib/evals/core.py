@@ -1,4 +1,4 @@
-"""Evaluation primitives for datasets, benchmarks, and user-owned runners.
+"""Evaluation primitives for benchmarks and user-owned runners.
 
 The evaluation layer deliberately does not sample a policy or know about a
 model SDK. A :class:`Benchmark` supplies an item collection and an environment

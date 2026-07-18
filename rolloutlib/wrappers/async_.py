@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+import math
 from typing import Any, Generic, TypeVar, cast
 
 from gymnasium.spaces import Space
 
 from ..envs.core import AsyncEnv
+from ..spaces.compatibility import check_space_value, require_space
 
 
 ObsT = TypeVar("ObsT")
@@ -33,10 +35,15 @@ class AsyncWrapper(
         """
         self.env = env
         self.action_space: Space[WrapperActT] = cast(
-            Space[WrapperActT], env.action_space
+            Space[WrapperActT],
+            require_space(env.action_space, name="environment action_space"),
         )
         self.observation_space: Space[WrapperObsT] = cast(
-            Space[WrapperObsT], env.observation_space
+            Space[WrapperObsT],
+            require_space(
+                env.observation_space,
+                name="environment observation_space",
+            ),
         )
         self.metadata = env.metadata
 
@@ -112,7 +119,14 @@ class AsyncActionWrapper(
         Returns:
             The inner environment's standard five-tuple.
         """
-        return await self.env.step(await self.action(action))
+        check_space_value(self.action_space, action, name="wrapper action")
+        inner_action = await self.action(action)
+        check_space_value(
+            self.env.action_space,
+            inner_action,
+            name="transformed action",
+        )
+        return await self.env.step(inner_action)
 
     @abstractmethod
     async def action(self, action: WrapperActT) -> ActT:
@@ -149,7 +163,18 @@ class AsyncObservationWrapper(
             The transformed initial observation and reset information.
         """
         observation, info = await self.env.reset(seed=seed, options=options)
-        return await self.observation(observation), info
+        check_space_value(
+            self.env.observation_space,
+            observation,
+            name="inner reset observation",
+        )
+        transformed = await self.observation(observation)
+        check_space_value(
+            self.observation_space,
+            transformed,
+            name="transformed reset observation",
+        )
+        return transformed, info
 
     async def step(
         self, action: ActT
@@ -163,8 +188,19 @@ class AsyncObservationWrapper(
             A five-tuple containing the transformed observation and step data.
         """
         observation, reward, terminated, truncated, info = await self.env.step(action)
+        check_space_value(
+            self.env.observation_space,
+            observation,
+            name="inner step observation",
+        )
+        transformed = await self.observation(observation)
+        check_space_value(
+            self.observation_space,
+            transformed,
+            name="transformed step observation",
+        )
         return (
-            await self.observation(observation),
+            transformed,
             reward,
             terminated,
             truncated,
@@ -199,9 +235,12 @@ class AsyncRewardWrapper(AsyncWrapper[ObsT, ActT, ObsT, ActT], Generic[ObsT, Act
             A five-tuple containing the transformed scalar reward.
         """
         observation, reward, terminated, truncated, info = await self.env.step(action)
+        transformed = float(await self.reward(reward))
+        if not math.isfinite(transformed):
+            raise ValueError("transformed reward must be finite")
         return (
             observation,
-            float(await self.reward(reward)),
+            transformed,
             terminated,
             truncated,
             info,

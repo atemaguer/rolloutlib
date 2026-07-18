@@ -137,6 +137,21 @@ cannot reliably distinguish an image, audio, or ordinary numeric state.
 Rolloutlib handles encoding after the application identifies the relevant
 fields.
 
+## Composition validation
+
+Rolloutlib uses Gymnasium spaces as contracts between producers and consumers.
+`spaces.check_space_compatibility(produced, accepted)` verifies that every value
+the producer may emit can be accepted by the consumer. Common Gymnasium scalar
+and array spaces, nested `Dict`, `Tuple`, and `Sequence` spaces, and rolloutlib's
+language spaces are compared structurally. Unknown custom spaces must compare
+equal, so the check remains conservative.
+
+Rollouts validate declared policy spaces against environment spaces before
+reset, then validate the actual observations, actions, rewards, termination
+flags, and info mappings as the episode runs. Wrappers similarly validate their
+transformed values. Use `spaces.check_space_value(space, value, name=...)` when
+building another composition point.
+
 ## Asynchronous environments
 
 `AsyncEnv` preserves the same observations, actions, rewards, termination
@@ -174,14 +189,17 @@ environment = wrappers.GradingWrapper(
     ExistingEnv(item),
     grader=grader,
     make_input=lambda env, action: (item, env.state, action),
+    input_space=grader.input_space,
 )
 ```
 
 By default, grading occurs on terminated or truncated steps, replaces the
 environment reward with `Score.value`, and retains the full score in `info`.
-Custom predicates and reward combiners can change those policies. When using a
-rubric grader, its rubric is already bound to the grader rather than passed
-through the environment wrapper.
+When `make_input` is present, `input_space` declares its output contract and is
+checked against the grader at construction time. Omit both to grade environment
+actions directly. Custom predicates and reward combiners can change those
+policies. When using a rubric grader, its rubric is already bound to the grader
+rather than passed through the environment wrapper.
 
 See [Composite graders](../graders/composite-graders.md#grading-inside-environments)
 for synchronous and asynchronous wrapper examples, terminal-step policies, and

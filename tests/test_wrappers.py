@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 import gymnasium as gym
+import pytest
 
 import rolloutlib
 import rolloutlib.envs.language as legacy_language_wrappers
@@ -131,5 +132,16 @@ def test_async_wrappers_transform_values_and_preserve_space_direction() -> None:
 
         await env.close()
         assert inner.closed
+
+    asyncio.run(run())
+
+
+def test_async_action_wrapper_rejects_invalid_transformed_actions() -> None:
+    async def run() -> None:
+        wrapper = ParseToolCall(ToolEnv())
+        oversized_query = tuple(ord("x") for _ in range(21))
+
+        with pytest.raises(ValueError, match="transformed action.*outside"):
+            await wrapper.step(oversized_query)
 
     asyncio.run(run())

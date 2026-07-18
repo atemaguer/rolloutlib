@@ -117,6 +117,7 @@ class _OpenAIResponsesPolicyBase:
         image_detail: str = "auto",
         store: bool = False,
         request_options: Mapping[str, Any] | None = None,
+        observation_space: gym.Space[Chat] | None = None,
         available_actions: AvailableActions | None = None,
         available_argument: str | None = None,
     ) -> None:
@@ -133,6 +134,7 @@ class _OpenAIResponsesPolicyBase:
         self.image_detail = image_detail
         self.store = store
         self.request_options = dict(request_options or {})
+        self.observation_space = observation_space
         self.available_actions = available_actions
         self.available_argument = available_argument
 
@@ -140,7 +142,12 @@ class _OpenAIResponsesPolicyBase:
     def _from_env_options(
         cls,
         environment: gym.Env[Chat, ToolCall],
-    ) -> tuple[ToolCallSpace, AvailableActions | None, str | None]:
+    ) -> tuple[
+        ToolCallSpace,
+        gym.Space[Chat],
+        AvailableActions | None,
+        str | None,
+    ]:
         action_space = environment.action_space
         if not isinstance(action_space, ToolCallSpace):
             raise TypeError(
@@ -154,6 +161,7 @@ class _OpenAIResponsesPolicyBase:
             argument_name = None
         return (
             action_space,
+            environment.observation_space,
             available_actions,
             argument_name if isinstance(argument_name, str) else None,
         )
@@ -287,13 +295,17 @@ class OpenAIResponsesPolicy(_OpenAIResponsesPolicyBase):
     ) -> OpenAIResponsesPolicy:
         """Create a policy bound to a wrapped environment's action space."""
 
-        action_space, available_actions, available_argument = cls._from_env_options(
-            environment
-        )
+        (
+            action_space,
+            observation_space,
+            available_actions,
+            available_argument,
+        ) = cls._from_env_options(environment)
         return cls(
             model,
             action_space,
             client=client,
+            observation_space=observation_space,
             available_actions=available_actions,
             available_argument=available_argument,
             **options,
@@ -330,13 +342,17 @@ class AsyncOpenAIResponsesPolicy(_OpenAIResponsesPolicyBase):
     ) -> AsyncOpenAIResponsesPolicy:
         """Create an async policy bound to a wrapped environment's action space."""
 
-        action_space, available_actions, available_argument = cls._from_env_options(
-            environment
-        )
+        (
+            action_space,
+            observation_space,
+            available_actions,
+            available_argument,
+        ) = cls._from_env_options(environment)
         return cls(
             model,
             action_space,
             client=client,
+            observation_space=observation_space,
             available_actions=available_actions,
             available_argument=available_argument,
             **options,

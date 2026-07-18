@@ -1,5 +1,10 @@
 # Getting started
 
+Rolloutlib provides standard, composable APIs for agentic RL post-training.
+Environments define interactive tasks, language-model policies choose actions,
+rollouts record training trajectories, and graders produce reward and
+evaluation signals.
+
 ## Requirements
 
 Python 3.11 or newer and [uv](https://docs.astral.sh/uv/).

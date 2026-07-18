@@ -6,7 +6,6 @@ from typing import Any
 import gymnasium as gym
 import pytest
 
-from rolloutlib.datasets import Dataset, RLDataset
 from rolloutlib.envs import AsyncEnv
 from rolloutlib.graders import Score
 from rolloutlib.rollouts import (
@@ -154,6 +153,34 @@ def test_rollout_max_steps_is_a_collection_truncation() -> None:
     assert trajectory.truncated is True
 
 
+def test_rollout_rejects_policy_actions_outside_environment_space() -> None:
+    environment = CountingEnv()
+
+    with pytest.raises(ValueError, match="policy action.*outside"):
+        rollout(environment, lambda observation: 3)
+
+    assert environment.value == 0
+
+
+def test_rollout_rejects_incompatible_declared_policy_spaces_before_reset() -> None:
+    class DeclaredPolicy:
+        observation_space = gym.spaces.Discrete(4)
+        action_space = gym.spaces.Text(max_length=10)
+
+        def __call__(self, observation: int) -> str:
+            return "invalid"
+
+    environment = CountingEnv()
+
+    with pytest.raises(
+        TypeError,
+        match="policy action_space.*incompatible.*environment action_space",
+    ):
+        rollout(environment, DeclaredPolicy())  # type: ignore[arg-type]
+
+    assert environment.value == 0
+
+
 def test_rollout_group_closes_envs_and_preserves_environment_scores() -> None:
     environments: list[ScoredCountingEnv] = []
 
@@ -179,24 +206,6 @@ def test_rollout_group_closes_envs_and_preserves_environment_scores() -> None:
     assert group.trajectories[0].steps[-1].score == group.scores[0]
     assert all(trajectory.complete for trajectory in group.trajectories)
     assert all(environment.closed for environment in environments)
-
-
-def test_dataset_is_a_source_and_rldataset_constructs_fresh_envs() -> None:
-    dataset = Dataset([1, 2, 3], metadata={"split": "train"})
-    rl_dataset = RLDataset(
-        [1, 2, 3],
-        make_env=lambda item: CountingEnv(target=item),
-        get_item_id=lambda item: f"item-{item}",
-    )
-
-    assert dataset[1] == 2
-    assert dataset[1:] == (2, 3)
-    assert dataset.map(lambda item: item * 2).items == (2, 4, 6)
-    assert dataset.filter(lambda item: item > 1).items == (2, 3)
-    assert dataset.take(2).items == (1, 2)
-    assert dataset.with_metadata(epoch=1).metadata == {"split": "train", "epoch": 1}
-    assert rl_dataset.item_id(1) == "item-2"
-    assert rl_dataset.make_env(rl_dataset[1]).target == 2
 
 
 def test_async_rollout_group_supports_async_policies_and_bounded_concurrency() -> None:

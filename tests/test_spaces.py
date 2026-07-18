@@ -62,6 +62,37 @@ def test_text_space_accepts_unicode_independently_of_sampling_alphabet() -> None
     assert "こんにちは" in space
 
 
+def test_space_compatibility_checks_structural_subsets() -> None:
+    assert spaces.is_space_subset(
+        gym.spaces.Discrete(3, start=2),
+        gym.spaces.Discrete(10),
+    )
+    assert not spaces.is_space_subset(
+        gym.spaces.Discrete(10),
+        gym.spaces.Discrete(3),
+    )
+    assert spaces.is_space_subset(
+        gym.spaces.Dict(
+            {
+                "answer": spaces.TextSpace(min_length=1, max_length=10),
+            }
+        ),
+        gym.spaces.Dict(
+            {
+                "answer": spaces.TextSpace(max_length=20),
+            }
+        ),
+    )
+
+    with pytest.raises(TypeError, match="producer.*incompatible.*consumer"):
+        spaces.check_space_compatibility(
+            gym.spaces.Box(-1, 1, shape=(2,), dtype=np.float32),
+            gym.spaces.Box(-1, 1, shape=(3,), dtype=np.float32),
+            produced_name="producer",
+            accepted_name="consumer",
+        )
+
+
 def test_message_space_accepts_typed_content_parts_without_models() -> None:
     value = {
         "role": "assistant",

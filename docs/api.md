@@ -27,10 +27,6 @@ The reference is generated from the public Python modules with
 
 ::: rolloutlib.rollouts
 
-## Datasets
-
-::: rolloutlib.datasets
-
 ## Graders
 
 ::: rolloutlib.graders

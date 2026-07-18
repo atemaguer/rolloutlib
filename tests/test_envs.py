@@ -9,6 +9,7 @@ import gymnasium as gym
 import pytest
 from gymnasium.utils.env_checker import check_env
 
+from rolloutlib import spaces
 from rolloutlib.envs import (
     AsyncEnv,
     AsyncFromSync,
@@ -279,7 +280,7 @@ def test_sync_bridge_passes_gymnasium_env_checker() -> None:
 
 class OneTurn(SingleTurnEnv[str, int]):
     action_space = gym.spaces.Discrete(10)
-    observation_space = gym.spaces.Text(min_length=0, max_length=20)
+    observation_space = spaces.TextSpace(max_length=20)
 
     def initial_observation(
         self, *, options: dict[str, Any] | None = None
@@ -295,7 +296,7 @@ class OneTurn(SingleTurnEnv[str, int]):
 
 class AsyncOneTurn(AsyncSingleTurnEnv[str, int]):
     action_space = gym.spaces.Discrete(10)
-    observation_space = gym.spaces.Text(min_length=0, max_length=20)
+    observation_space = spaces.TextSpace(max_length=20)
 
     async def initial_observation(
         self, *, options: dict[str, Any] | None = None
@@ -340,7 +341,7 @@ def test_async_single_turn_environment_matches_sync_semantics() -> None:
 def test_single_turn_environment_preserves_a_structured_score() -> None:
     class ScoredOneTurn(SingleTurnEnv[str, int]):
         action_space = gym.spaces.Discrete(10)
-        observation_space = gym.spaces.Text(min_length=0, max_length=20)
+        observation_space = spaces.TextSpace(max_length=20)
 
         def initial_observation(
             self, *, options: dict[str, Any] | None = None
@@ -384,7 +385,6 @@ def test_sync_grading_wrapper_grades_inside_step() -> None:
             },
             input_space=gym.spaces.Discrete(10),
         ),
-        make_input=lambda environment, action: action,
     )
 
     env.reset()
@@ -414,7 +414,6 @@ def test_async_grading_wrapper_awaits_grading_inside_step() -> None:
                 judge,
                 input_space=gym.spaces.Discrete(10),
             ),
-            make_input=lambda environment, action: action,
         )
         await env.reset(options={"value": 2})
         _, reward, terminated, _, info = await env.step(3)
@@ -424,3 +423,61 @@ def test_async_grading_wrapper_awaits_grading_inside_step() -> None:
         assert Score.from_info(info) is not None
 
     asyncio.run(run())
+
+
+def test_grading_wrapper_rejects_incompatible_action_and_grader_spaces() -> None:
+    grader = RubricGrader(
+        Rubric(criteria=(Criterion(id="correct", description="Correct."),)),
+        lambda value, rubric: {"correct": Score(1.0)},
+        input_space=gym.spaces.Text(max_length=20),
+    )
+
+    with pytest.raises(
+        TypeError,
+        match="environment action_space.*incompatible.*grader input_space",
+    ):
+        GradingWrapper(EchoEnv(), grader=grader)
+
+
+def test_grading_wrapper_requires_and_checks_custom_input_space() -> None:
+    grader = RubricGrader(
+        Rubric(criteria=(Criterion(id="correct", description="Correct."),)),
+        lambda value, rubric: {"correct": Score(float(value == "3"))},
+        input_space=gym.spaces.Text(max_length=20),
+    )
+
+    with pytest.raises(TypeError, match="input_space is required"):
+        GradingWrapper(
+            EchoEnv(),
+            grader=grader,
+            make_input=lambda environment, action: str(action),
+        )
+
+    env = GradingWrapper(
+        EchoEnv(),
+        grader=grader,
+        make_input=lambda environment, action: str(action),
+        input_space=gym.spaces.Text(max_length=10),
+    )
+    env.reset()
+    _, reward, _, _, _ = env.step(3)
+
+    assert reward == 1.0
+
+
+def test_grading_wrapper_checks_custom_input_values_at_runtime() -> None:
+    grader = RubricGrader(
+        Rubric(criteria=(Criterion(id="correct", description="Correct."),)),
+        lambda value, rubric: {"correct": Score(1.0)},
+        input_space=gym.spaces.Text(max_length=20),
+    )
+    env = GradingWrapper(
+        EchoEnv(),
+        grader=grader,
+        make_input=lambda environment, action: action,  # type: ignore[arg-type]
+        input_space=gym.spaces.Text(max_length=10),
+    )
+    env.reset()
+
+    with pytest.raises(ValueError, match="make_input result.*outside"):
+        env.step(3)

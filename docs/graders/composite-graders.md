@@ -254,6 +254,7 @@ environment = wrappers.GradingWrapper(
         reference_answer=item.reference_answer,
         required_format=item.required_format,
     ),
+    input_space=evaluation_space,
 )
 ```
 
@@ -278,6 +279,7 @@ environment = wrappers.AsyncGradingWrapper(
         reference_answer=item.reference_answer,
         required_format=item.required_format,
     ),
+    input_space=evaluation_space,
 )
 ```
 
@@ -290,6 +292,7 @@ environment = wrappers.GradingWrapper(
     ExistingEnv(item),
     grader=grader,
     make_input=make_input,
+    input_space=grader.input_space,
     when=lambda terminated, truncated: terminated,
 )
 ```
@@ -307,6 +310,7 @@ environment = wrappers.GradingWrapper(
     ExistingEnv(item),
     grader=grader,
     make_input=make_input,
+    input_space=grader.input_space,
     combine_reward=lambda environment_reward, score: (
         environment_reward + score.value
     ),

@@ -32,6 +32,8 @@ from pydantic import (
     model_validator,
 )
 
+from ..spaces.compatibility import check_space_compatibility, require_space
+
 
 InputT = TypeVar("InputT", contravariant=True)
 RubricInputT = TypeVar("RubricInputT")
@@ -350,6 +352,14 @@ def _sync_score(value: object, *, source: str) -> Score:
     return Score.from_value(cast(Any, value))
 
 
+def _validated_input_space(
+    value: Space[InputT],
+    *,
+    name: str = "grader input_space",
+) -> Space[InputT]:
+    return cast(Space[InputT], require_space(value, name=name))
+
+
 class Grader(Generic[InputT], ABC):
     """Synchronous grading contract.
 
@@ -373,12 +383,13 @@ class Grader(Generic[InputT], ABC):
 
     def _validate_input(self, input: InputT) -> None:
         try:
-            valid = self.input_space.contains(input)
+            input_space = _validated_input_space(self.input_space)
         except AttributeError as error:
             raise TypeError("grader must define an input_space") from error
+        valid = input_space.contains(input)
         if not valid:
             raise ValueError(
-                f"grader input is outside input_space: {self.input_space!r}"
+                f"grader input is outside input_space: {input_space!r}"
             )
 
 
@@ -400,12 +411,13 @@ class AsyncGrader(Generic[InputT], ABC):
 
     def _validate_input(self, input: InputT) -> None:
         try:
-            valid = self.input_space.contains(input)
+            input_space = _validated_input_space(self.input_space)
         except AttributeError as error:
             raise TypeError("grader must define an input_space") from error
+        valid = input_space.contains(input)
         if not valid:
             raise ValueError(
-                f"grader input is outside input_space: {self.input_space!r}"
+                f"grader input is outside input_space: {input_space!r}"
             )
 
 
@@ -565,7 +577,7 @@ class RubricGrader(Grader[RubricInputT]):
     ) -> None:
         self.rubric = rubric
         self.judge = judge
-        self.input_space = input_space
+        self.input_space = _validated_input_space(input_space)
         self._aggregate = aggregate
         self._metadata = dict(metadata or {})
 
@@ -608,7 +620,7 @@ class AsyncRubricGrader(AsyncGrader[RubricInputT]):
     ) -> None:
         self.rubric = rubric
         self.judge = judge
-        self.input_space = input_space
+        self.input_space = _validated_input_space(input_space)
         self._aggregate = aggregate
         self._metadata = dict(metadata or {})
 
@@ -646,7 +658,7 @@ class RewardGrader(Grader[RewardInputT]):
         _validate_names(rewards, kind="reward")
         self.rewards = dict(rewards)
         self.weights = _resolve_weights(self.rewards, weights)
-        self.input_space = input_space
+        self.input_space = _validated_input_space(input_space)
         self._aggregate = aggregate
         self._metadata = dict(metadata or {})
 
@@ -678,7 +690,7 @@ class AsyncRewardGrader(AsyncGrader[RewardInputT]):
         _validate_names(rewards, kind="reward")
         self.rewards = dict(rewards)
         self.weights = _resolve_weights(self.rewards, weights)
-        self.input_space = input_space
+        self.input_space = _validated_input_space(input_space)
         self._aggregate = aggregate
         self._metadata = dict(metadata or {})
 
@@ -718,9 +730,22 @@ class CompositeGrader(Grader[CompositeInputT]):
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
         _validate_names(graders, kind="grader")
+        if any(not isinstance(grader, Grader) for grader in graders.values()):
+            raise TypeError("CompositeGrader children must be synchronous Graders")
         self.graders = dict(graders)
         self.weights = _resolve_weights(self.graders, weights)
-        self.input_space = input_space
+        self.input_space = _validated_input_space(input_space)
+        for name, grader in self.graders.items():
+            child_space = _validated_input_space(
+                grader.input_space,
+                name=f"grader {name!r} input_space",
+            )
+            check_space_compatibility(
+                self.input_space,
+                child_space,
+                produced_name="composite input_space",
+                accepted_name=f"grader {name!r} input_space",
+            )
         self._aggregate = aggregate
         self._metadata = dict(metadata or {})
 
@@ -752,9 +777,27 @@ class AsyncCompositeGrader(AsyncGrader[CompositeInputT]):
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
         _validate_names(graders, kind="grader")
+        if any(
+            not isinstance(grader, (Grader, AsyncGrader))
+            for grader in graders.values()
+        ):
+            raise TypeError(
+                "AsyncCompositeGrader children must be Graders or AsyncGraders"
+            )
         self.graders = dict(graders)
         self.weights = _resolve_weights(self.graders, weights)
-        self.input_space = input_space
+        self.input_space = _validated_input_space(input_space)
+        for name, grader in self.graders.items():
+            child_space = _validated_input_space(
+                grader.input_space,
+                name=f"grader {name!r} input_space",
+            )
+            check_space_compatibility(
+                self.input_space,
+                child_space,
+                produced_name="composite input_space",
+                accepted_name=f"grader {name!r} input_space",
+            )
         self._aggregate = aggregate
         self._metadata = dict(metadata or {})
 

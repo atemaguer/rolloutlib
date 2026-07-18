@@ -1,9 +1,8 @@
-"""Gymnasium-style environments and rollout primitives for post-training."""
+"""Gymnasium-native infrastructure for agentic RL post-training."""
 
 from importlib.metadata import version
 
-from . import content, datasets, envs, evals, graders, policies, rollouts, spaces, wrappers
-from .datasets import Dataset, RLDataset
+from . import content, envs, evals, graders, policies, rollouts, spaces, wrappers
 from .envs import (
     AsyncEnv,
     AsyncSingleTurnEnv,
@@ -46,7 +45,6 @@ __all__ = [
     "AsyncSingleTurnEnv",
     "ChatObservationWrapper",
     "ChatHistoryWrapper",
-    "Dataset",
     "Criterion",
     "Env",
     "GradingWrapper",
@@ -54,7 +52,6 @@ __all__ = [
     "Level",
     "Policy",
     "PolicyOutput",
-    "RLDataset",
     "RolloutError",
     "Rubric",
     "Score",
@@ -70,7 +67,6 @@ __all__ = [
     "arollout_group",
     "check_async_env",
     "content",
-    "datasets",
     "envs",
     "evals",
     "graders",
