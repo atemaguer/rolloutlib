@@ -22,7 +22,7 @@ from typing import Any
 
 import gymnasium as gym
 
-from rolloutlib.envs import AsyncEnv
+from rolloutlib.envs import Env
 from rolloutlib.rollouts import (
     PolicyOutput,
     arollout_group,
@@ -50,7 +50,7 @@ class OneTurnEnv(gym.Env[int, int]):
         return 0, float(action), True, False, {}
 
 
-class AsyncOneTurnEnv(AsyncEnv[int, int]):
+class AwaitableOneTurnEnv(Env[int, int]):
     """Async form of :class:`OneTurnEnv`."""
 
     observation_space = gym.spaces.Discrete(1)
@@ -62,7 +62,7 @@ class AsyncOneTurnEnv(AsyncEnv[int, int]):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[int, dict[str, Any]]:
-        await super().reset(seed=seed, options=options)
+        super().reset(seed=seed, options=options)
         return 0, {}
 
     async def step(
@@ -127,7 +127,7 @@ def controlled_benchmark(
         asyncio.run(
             arollout_group(
                 None,
-                lambda _: AsyncOneTurnEnv(),
+                lambda _: AwaitableOneTurnEnv(),
                 batch_policy=async_batch_policy,
                 num_rollouts=group_size,
             )
@@ -312,7 +312,7 @@ def live_tinker_benchmark(
         asyncio.run(
             arollout_group(
                 None,
-                lambda _: AsyncOneTurnEnv(),
+                lambda _: AwaitableOneTurnEnv(),
                 batch_policy=active_policy,
                 num_rollouts=group_size,
             )

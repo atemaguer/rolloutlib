@@ -44,7 +44,7 @@ score = grader.grade(item)
 ```
 
 `CompositeGrader` accepts synchronous child graders. For sync and async
-children together, use `AsyncCompositeGrader`.
+children together, use `CompositeGrader`.
 
 Constructor options:
 
@@ -148,14 +148,14 @@ grader = CompositeGrader(
 
 This makes provenance available at each layer.
 
-## Async composition
+## Awaitable composition
 
-`AsyncCompositeGrader` accepts both synchronous and asynchronous children:
+`CompositeGrader` accepts both synchronous and asynchronous children:
 
 ```python
-from rolloutlib.graders import AsyncCompositeGrader
+from rolloutlib.graders import CompositeGrader
 
-grader = AsyncCompositeGrader(
+grader = CompositeGrader(
     {
         "quality": async_rubric_grader,
         "verification": reward_grader,
@@ -172,11 +172,10 @@ grader = AsyncCompositeGrader(
 score = await grader.grade(item)
 ```
 
-Children are scheduled concurrently. Use the async composite when any child
-performs asynchronous I/O. A synchronous child is called normally inside the
-async operation; long-running synchronous work can still block the event loop,
-so applications should provide an async implementation for blocking I/O or
-offload it appropriately.
+Children are scheduled concurrently whenever any child is awaitable. The same
+`CompositeGrader` remains immediate when every child is synchronous.
+Long-running synchronous work can still block the event loop, so applications
+should provide an async implementation for blocking I/O or offload it.
 
 ## Custom aggregation
 
@@ -193,7 +192,7 @@ def safety_gate(scores) -> float:
     )
 
 
-grader = AsyncCompositeGrader(
+grader = CompositeGrader(
     {
         "quality": async_rubric_grader,
         "verification": reward_grader,
@@ -239,8 +238,7 @@ one child.
 ## Grading inside environments
 
 When a grade determines the environment reward, perform grading inside
-`step`. `GradingWrapper` composes a synchronous Gymnasium environment with a
-synchronous grader:
+`step`. `GradingWrapper` composes an environment with a grader:
 
 ```python
 from rolloutlib import wrappers
@@ -265,13 +263,13 @@ By default, the wrapper:
 3. replaces the inner scalar reward with `score.value`;
 4. serializes the full score under `info["score"]`.
 
-`AsyncGradingWrapper` accepts either a sync or async grader:
+The same wrapper accepts either a sync or async grader:
 
 ```python
 from rolloutlib import wrappers
 
-environment = wrappers.AsyncGradingWrapper(
-    ExistingAsyncEnv(item),
+environment = wrappers.GradingWrapper(
+    ExistingEnv(item),
     grader=async_grader,
     make_input=lambda env, action: EvaluationInput(
         prompt=item.prompt,
@@ -322,8 +320,7 @@ documented policy makes training behavior difficult to interpret.
 
 ## Direct use in single-turn environments
 
-`SingleTurnEnv.evaluate` and `AsyncSingleTurnEnv.evaluate` may return a `Score`
-directly:
+`SingleTurnEnv.evaluate` may return a `Score` directly or an awaitable score:
 
 ```python
 class AnswerEnv(SingleTurnEnv[str, str]):

@@ -19,7 +19,8 @@ import numpy as np
 from gymnasium.vector import AutoresetMode, SyncVectorEnv
 from gymnasium.vector.utils import concatenate, create_empty_array, iterate
 
-from ..envs import AsyncEnv
+from .._awaitables import resolve
+from ..envs import Env
 from ..graders import Score
 from ..spaces.compatibility import (
     check_space_compatibility,
@@ -83,24 +84,7 @@ class PolicyOutput(Generic[ActionT]):
 
 
 class Policy(Protocol[PolicyObservationT, PolicyActionT]):
-    """Synchronous mapping from an observation to an environment action."""
-
-    def __call__(
-        self, observation: PolicyObservationT, /
-    ) -> PolicyActionT | PolicyOutput[PolicyActionT]:
-        """Map one observation to an action or structured policy output.
-
-        Args:
-            observation: Observation supplied by the environment.
-
-        Returns:
-            An environment action or a :class:`PolicyOutput` containing one.
-        """
-        ...
-
-
-class AsyncPolicy(Protocol[PolicyObservationT, PolicyActionT]):
-    """Async-compatible policy mapping with optional awaitable output."""
+    """A policy mapping whose result may be immediate or awaitable."""
 
     def __call__(
         self, observation: PolicyObservationT, /
@@ -121,17 +105,7 @@ class AsyncPolicy(Protocol[PolicyObservationT, PolicyActionT]):
 
 
 class BatchPolicy(Protocol[PolicyObservationT, PolicyActionT]):
-    """Synchronous mapping from a batch of observations to matching actions."""
-
-    def __call__(
-        self, observations: Sequence[PolicyObservationT], /
-    ) -> Sequence[PolicyActionT | PolicyOutput[PolicyActionT]]:
-        """Return exactly one action or structured output per observation."""
-        ...
-
-
-class AsyncBatchPolicy(Protocol[PolicyObservationT, PolicyActionT]):
-    """Async-compatible mapping from active observations to matching actions."""
+    """A batch policy whose result may be immediate or awaitable."""
 
     def __call__(
         self, observations: Sequence[PolicyObservationT], /
@@ -639,8 +613,8 @@ def rollout(
 
 
 async def arollout(
-    environment: AsyncEnv[ObservationT, ActionT],
-    policy: AsyncPolicy[ObservationT, ActionT],
+    environment: Env[ObservationT, ActionT],
+    policy: Policy[ObservationT, ActionT],
     *,
     seed: int | None = None,
     options: dict[str, Any] | None = None,
@@ -667,7 +641,9 @@ async def arollout(
     if max_steps is not None and max_steps < 0:
         raise ValueError("max_steps must be non-negative")
     _check_composition(environment, policy)
-    observation, initial_info = await environment.reset(seed=seed, options=options)
+    observation, initial_info = await resolve(
+        environment.reset(seed=seed, options=options)
+    )
     _check_reset_result(environment, observation, initial_info)
     steps: list[Step[ObservationT, ActionT]] = []
     terminated = False
@@ -676,17 +652,14 @@ async def arollout(
         if max_steps is not None and len(steps) >= max_steps:
             truncated = True
             break
-        value = policy(observation)
-        if inspect.isawaitable(value):
-            value = await value
-        output = _normalize_policy_output(value)
+        output = _normalize_policy_output(await resolve(policy(observation)))
         check_space_value(
             environment.action_space,
             output.action,
             name="policy action",
         )
-        next_observation, reward, terminated, truncated, info = await environment.step(
-            cast(ActionT, output.action)
+        next_observation, reward, terminated, truncated, info = await resolve(
+            environment.step(cast(ActionT, output.action))
         )
         _check_step_result(
             environment,
@@ -1089,8 +1062,8 @@ def rollout_group(
 
 async def _arollout_group_scalar(
     item: ItemT,
-    make_env: Callable[[ItemT], AsyncEnv[ObservationT, ActionT] | Awaitable[AsyncEnv[ObservationT, ActionT]]],
-    policy: AsyncPolicy[ObservationT, ActionT],
+    make_env: Callable[[ItemT], Env[ObservationT, ActionT] | Awaitable[Env[ObservationT, ActionT]]],
+    policy: Policy[ObservationT, ActionT],
     *,
     num_rollouts: int = 1,
     item_id: str | None = None,
@@ -1136,7 +1109,7 @@ async def _arollout_group_scalar(
             try:
                 return await arollout(environment, policy, max_steps=max_steps)
             finally:
-                await environment.close()
+                await resolve(environment.close())
 
     trajectories = list(
         await asyncio.gather(*(collect_one() for _ in range(num_rollouts)))
@@ -1153,10 +1126,10 @@ async def _arollout_group_batch(
     item: ItemT,
     make_env: Callable[
         [ItemT],
-        AsyncEnv[ObservationT, ActionT]
-        | Awaitable[AsyncEnv[ObservationT, ActionT]],
+        Env[ObservationT, ActionT]
+        | Awaitable[Env[ObservationT, ActionT]],
     ],
-    policy: AsyncBatchPolicy[ObservationT, ActionT],
+    policy: BatchPolicy[ObservationT, ActionT],
     *,
     num_rollouts: int = 1,
     item_id: str | None = None,
@@ -1197,14 +1170,14 @@ async def _arollout_group_batch(
         async with semaphore:
             return await awaitable
 
-    async def create_one() -> AsyncEnv[ObservationT, ActionT]:
+    async def create_one() -> Env[ObservationT, ActionT]:
         async with semaphore:
             environment = make_env(item)
             if inspect.isawaitable(environment):
                 environment = await environment
             return environment
 
-    environments: list[AsyncEnv[ObservationT, ActionT]] = []
+    environments: list[Env[ObservationT, ActionT]] = []
     try:
         creation_results = await asyncio.gather(
             *(create_one() for _ in range(num_rollouts)),
@@ -1251,7 +1224,7 @@ async def _arollout_group_batch(
             )
 
         reset_results = await asyncio.gather(
-            *(bounded(environment.reset()) for environment in environments)
+            *(bounded(resolve(environment.reset())) for environment in environments)
         )
         observations: list[ObservationT] = []
         initial_infos: list[dict[str, Any]] = []
@@ -1303,7 +1276,7 @@ async def _arollout_group_batch(
 
             step_results = await asyncio.gather(
                 *(
-                    bounded(environments[index].step(action))
+                    bounded(resolve(environments[index].step(action)))
                     for index, action in zip(active, actions, strict=True)
                 )
             )
@@ -1354,7 +1327,9 @@ async def _arollout_group_batch(
         ]
     finally:
         if environments:
-            await asyncio.gather(*(environment.close() for environment in environments))
+            await asyncio.gather(
+                *(resolve(environment.close()) for environment in environments)
+            )
 
     return TrajectoryGroup(
         item=item,
@@ -1368,12 +1343,12 @@ async def arollout_group(
     item: ItemT,
     make_env: Callable[
         [ItemT],
-        AsyncEnv[ObservationT, ActionT]
-        | Awaitable[AsyncEnv[ObservationT, ActionT]],
+        Env[ObservationT, ActionT]
+        | Awaitable[Env[ObservationT, ActionT]],
     ],
-    policy: AsyncPolicy[ObservationT, ActionT] | None = None,
+    policy: Policy[ObservationT, ActionT] | None = None,
     *,
-    batch_policy: AsyncBatchPolicy[ObservationT, ActionT] | None = None,
+    batch_policy: BatchPolicy[ObservationT, ActionT] | None = None,
     num_rollouts: int = 1,
     item_id: str | None = None,
     max_steps: int | None = None,
@@ -1425,7 +1400,7 @@ async def arollout_group(
     return await _arollout_group_scalar(
         item,
         make_env,
-        cast(AsyncPolicy[ObservationT, ActionT], policy),
+        cast(Policy[ObservationT, ActionT], policy),
         num_rollouts=num_rollouts,
         item_id=item_id,
         max_steps=max_steps,
@@ -1436,8 +1411,8 @@ async def arollout_group(
 
 __all__ = [
     "ActionT",
-    "AsyncBatchPolicy",
-    "AsyncPolicy",
+    "BatchPolicy",
+    "Policy",
     "BatchPolicy",
     "ItemT",
     "ObservationT",

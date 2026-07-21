@@ -214,10 +214,10 @@ function.
 
 ## Asynchronous reward functions
 
-Use `AsyncRewardGrader` when any function performs asynchronous I/O:
+Use `RewardGrader` when any function performs asynchronous I/O:
 
 ```python
-from rolloutlib.graders import AsyncRewardGrader
+from rolloutlib.graders import RewardGrader
 
 
 async def remote_safety_check(input: AnswerInput) -> float:
@@ -236,7 +236,7 @@ async def groundedness_check(input: AnswerInput) -> Score:
     )
 
 
-grader = AsyncRewardGrader(
+grader = RewardGrader(
     {
         "safety": remote_safety_check,
         "groundedness": groundedness_check,
@@ -248,13 +248,10 @@ grader = AsyncRewardGrader(
 score = await grader.grade(item)
 ```
 
-The async grader accepts both sync and async reward functions. Independent
-functions are scheduled concurrently. The order of `score.components` still
+The same `RewardGrader` accepts both sync and async reward functions.
+Independent awaitable functions are scheduled concurrently, while an all-sync
+configuration returns `Score` directly. The order of `score.components` still
 matches the configured mapping.
-
-Use the sync grader only with synchronous functions. If a sync reward returns
-an awaitable, grading raises `TypeError` and directs the caller to an async
-grader.
 
 ## Common patterns
 

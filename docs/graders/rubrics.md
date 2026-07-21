@@ -314,7 +314,7 @@ scores.
 ```python
 from pydantic import BaseModel, Field
 
-from rolloutlib.graders import AsyncRubricGrader, Rubric, Score
+from rolloutlib.graders import RubricGrader, Rubric, Score
 
 
 class CriterionResult(BaseModel):
@@ -340,7 +340,7 @@ async def judge(input: GradingInput, rubric: Rubric):
     }
 
 
-grader = AsyncRubricGrader(
+grader = RubricGrader(
     rubric,
     judge,
     input_space=grading_input_space,
@@ -370,8 +370,8 @@ If each example has its own rubric, create a grader when constructing that
 example's environment:
 
 ```python
-def make_grader(example: EvaluationExample) -> AsyncRubricGrader[GradingInput]:
-    return AsyncRubricGrader(
+def make_grader(example: EvaluationExample) -> RubricGrader[GradingInput]:
+    return RubricGrader(
         example.rubric,
         judge,
         input_space=grading_input_space,

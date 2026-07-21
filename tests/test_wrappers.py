@@ -10,12 +10,12 @@ import rolloutlib
 import rolloutlib.envs.language as legacy_language_wrappers
 import rolloutlib.envs.wrappers as legacy_async_wrappers
 from rolloutlib import spaces, wrappers
-from rolloutlib.envs import AsyncEnv
+from rolloutlib.envs import Env
 from rolloutlib.types import Chat, ToolCall
 from rolloutlib.wrappers import (
-    AsyncActionWrapper,
-    AsyncObservationWrapper,
-    AsyncRewardWrapper,
+    ActionWrapper,
+    ObservationWrapper,
+    RewardWrapper,
 )
 
 
@@ -25,12 +25,12 @@ def test_wrappers_namespace_is_canonical_and_legacy_exports_remain_compatible() 
     assert legacy_language_wrappers.ChatObservationWrapper is (
         wrappers.ChatObservationWrapper
     )
-    assert legacy_async_wrappers.AsyncWrapper is wrappers.AsyncWrapper
+    assert legacy_async_wrappers.Wrapper is wrappers.Wrapper
     assert rolloutlib.envs.ToolCallActionWrapper is wrappers.ToolCallActionWrapper
-    assert rolloutlib.envs.AsyncGradingWrapper is wrappers.AsyncGradingWrapper
+    assert rolloutlib.envs.GradingWrapper is wrappers.GradingWrapper
 
 
-class ToolEnv(AsyncEnv[Chat, ToolCall]):
+class ToolEnv(Env[Chat, ToolCall]):
     action_space = spaces.tools.call(
         {
             "search": gym.spaces.Dict(
@@ -51,7 +51,7 @@ class ToolEnv(AsyncEnv[Chat, ToolCall]):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[Chat, dict[str, Any]]:
-        await super().reset(seed=seed, options=options)
+        super().reset(seed=seed, options=options)
         return [{"role": "user", "content": "search"}], {"reset": True}
 
     async def step(
@@ -71,7 +71,7 @@ class ToolEnv(AsyncEnv[Chat, ToolCall]):
         self.closed = True
 
 
-class ParseToolCall(AsyncActionWrapper[Chat, tuple[int, ...], ToolCall]):
+class ParseToolCall(ActionWrapper[Chat, tuple[int, ...], ToolCall]):
     def __init__(self, env: ToolEnv) -> None:
         super().__init__(env)
         self.action_space = spaces.tokens.sequence(256)
@@ -83,7 +83,7 @@ class ParseToolCall(AsyncActionWrapper[Chat, tuple[int, ...], ToolCall]):
         }
 
 
-class LastMessage(AsyncObservationWrapper[str, tuple[int, ...], Chat]):
+class LastMessage(ObservationWrapper[str, tuple[int, ...], Chat]):
     def __init__(self, env: ParseToolCall) -> None:
         super().__init__(env)
         self.observation_space = spaces.text.text(min_length=1, max_length=20)
@@ -94,7 +94,7 @@ class LastMessage(AsyncObservationWrapper[str, tuple[int, ...], Chat]):
         return content
 
 
-class DoubleReward(AsyncRewardWrapper[str, tuple[int, ...]]):
+class DoubleReward(RewardWrapper[str, tuple[int, ...]]):
     async def reward(self, reward: float) -> float:
         return reward * 2
 

@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import gymnasium as gym
 
+from .._awaitables import MaybeAwaitable, map_result
 from ..rollouts import PolicyOutput
 from ..spaces import ToolCallSpace, to_json_schema
 from ..types import Chat, ToolCall
@@ -270,7 +271,11 @@ class _OpenAIResponsesPolicyBase:
 
 
 class OpenAIResponsesPolicy(_OpenAIResponsesPolicyBase):
-    """Synchronous OpenAI Responses policy producing one Gymnasium action."""
+    """OpenAI Responses policy for synchronous or asynchronous clients.
+
+    Pass either ``openai.OpenAI`` or ``openai.AsyncOpenAI`` as ``client``. The
+    policy result mirrors the client's calling style.
+    """
 
     def __init__(
         self,
@@ -311,60 +316,16 @@ class OpenAIResponsesPolicy(_OpenAIResponsesPolicyBase):
             **options,
         )
 
-    def __call__(self, observation: Chat) -> PolicyOutput[ToolCall]:
-        response = self.client.responses.create(**self._request(observation))
-        return self._output(response)
+    def __call__(self, observation: Chat) -> MaybeAwaitable[PolicyOutput[ToolCall]]:
+        """Request one tool call, returning a value or coroutine from the client."""
 
-
-class AsyncOpenAIResponsesPolicy(_OpenAIResponsesPolicyBase):
-    """Asynchronous OpenAI Responses policy producing one Gymnasium action."""
-
-    def __init__(
-        self,
-        model: str,
-        action_space: ToolCallSpace,
-        *,
-        client: Any | None = None,
-        **options: Any,
-    ) -> None:
-        if client is None:
-            client = importlib.import_module("openai").AsyncOpenAI()
-        super().__init__(client, model, action_space, **options)
-
-    @classmethod
-    def from_env(
-        cls,
-        environment: gym.Env[Chat, ToolCall],
-        *,
-        model: str,
-        client: Any | None = None,
-        **options: Any,
-    ) -> AsyncOpenAIResponsesPolicy:
-        """Create an async policy bound to a wrapped environment's action space."""
-
-        (
-            action_space,
-            observation_space,
-            available_actions,
-            available_argument,
-        ) = cls._from_env_options(environment)
-        return cls(
-            model,
-            action_space,
-            client=client,
-            observation_space=observation_space,
-            available_actions=available_actions,
-            available_argument=available_argument,
-            **options,
+        return map_result(
+            self.client.responses.create(**self._request(observation)),
+            self._output,
         )
-
-    async def __call__(self, observation: Chat) -> PolicyOutput[ToolCall]:
-        response = await self.client.responses.create(**self._request(observation))
-        return self._output(response)
 
 
 __all__ = [
-    "AsyncOpenAIResponsesPolicy",
     "OpenAIResponsesPolicy",
     "to_openai_input",
 ]

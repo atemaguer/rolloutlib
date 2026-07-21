@@ -19,19 +19,20 @@ model provider.
 
 ## The common contract
 
-Every synchronous grader implements:
+For immediate collaborators, grading is direct:
 
 ```python
 score = grader.grade(input)
 ```
 
-Every asynchronous grader implements:
+When a judge, reward function, or child grader is asynchronous, the same
+method returns an awaitable:
 
 ```python
 score = await grader.grade(input)
 ```
 
-Both operations always return `Score`. The rubric, reward functions, model
+The resolved result is always a `Score`. The rubric, reward functions, model
 client, and aggregation policy are configuration of a particular grader; they
 are not additional arguments to `grade`.
 
@@ -39,8 +40,8 @@ This narrow contract is the point of the abstraction. Code that consumes a
 grader only needs to know:
 
 1. what value belongs to its `input_space`;
-2. whether the grader is synchronous or asynchronous;
-3. that the result is a `Score`.
+2. whether the particular operation returned an awaitable;
+3. that the resolved result is a `Score`.
 
 ## Input spaces
 
@@ -91,11 +92,7 @@ Rolloutlib provides three concrete families:
 | `RewardGrader` | named reward functions | weighted sum | exact checks, tests, validators, and heuristics |
 | `CompositeGrader` | complete child graders | weighted mean | hybrid rewards and reusable grading pipelines |
 
-Each has an async counterpart:
-
-- `AsyncRubricGrader`;
-- `AsyncRewardGrader`;
-- `AsyncCompositeGrader`.
+Each family accepts synchronous or asynchronous collaborators.
 
 The families are complementary rather than mutually exclusive. A common
 post-training reward uses:
@@ -213,21 +210,12 @@ policies.
 
 ## Synchronous and asynchronous grading
 
-Choose the synchronous family when every operation is local and synchronous.
-Choose the async family when any judge, reward function, or child grader makes
-network requests or performs asynchronous I/O.
-
-The async variants accept both sync and async user operations where useful:
-
-| Async grader | Accepted operations |
-| --- | --- |
-| `AsyncRubricGrader` | a sync or async judge |
-| `AsyncRewardGrader` | sync and async reward functions |
-| `AsyncCompositeGrader` | sync and async child graders |
-
-Independent reward functions and child graders are scheduled concurrently.
-Synchronous graders reject awaitable results instead of silently running an
-event loop.
+Use the same family whether work is local or asynchronous. `RubricGrader`
+accepts a sync or async judge, `RewardGrader` accepts sync or async reward
+functions, and `CompositeGrader` accepts children with either calling style.
+When any collaborator is asynchronous, `grade` returns an awaitable; otherwise
+it returns `Score` directly. Independent awaitable reward functions and child
+graders are scheduled concurrently.
 
 ## Public value and callable types
 
@@ -236,10 +224,8 @@ The public type aliases make extension points explicit:
 | Type | Meaning |
 | --- | --- |
 | `ScoreValue` | `float \| Score` |
-| `RewardFunction[InputT]` | synchronous `InputT -> ScoreValue` |
-| `AsyncRewardFunction[InputT]` | sync or awaitable `InputT -> ScoreValue` |
-| `RubricJudge[InputT]` | synchronous `(InputT, Rubric) -> criterion mapping` |
-| `AsyncRubricJudge[InputT]` | sync or awaitable rubric judge |
+| `RewardFunction[InputT]` | `InputT -> ScoreValue` or an awaitable score |
+| `RubricJudge[InputT]` | `(InputT, Rubric) -> criterion mapping` or an awaitable mapping |
 | `ScoreAggregator` | named component scores to a scalar |
 | `RubricAggregator` | rubric plus criterion scores to a scalar |
 

@@ -40,18 +40,18 @@ class EchoEnv(Env):
         return str(action), float(action), True, False, {}
 ```
 
-Async environments preserve the same value-level contract:
+The same `Env` supports asynchronous implementations:
 
 ```python
-from rolloutlib import AsyncEnv
+from rolloutlib import Env
 
 
-class ToolEnv(AsyncEnv):
+class ToolEnv(Env):
     action_space = ...
     observation_space = ...
 
     async def reset(self, *, seed=None, options=None):
-        await super().reset(seed=seed, options=options)
+        super().reset(seed=seed, options=options)
         return observation, {}
 
     async def step(self, action):
@@ -59,9 +59,9 @@ class ToolEnv(AsyncEnv):
         return next_observation, reward, terminated, truncated, {"result": result}
 ```
 
-Use `as_async` and `as_sync` when integrating an existing environment with the
-other calling convention. Calls on one environment instance are serialized;
-concurrency belongs across independent instances.
+`rollout` requires immediate environment and policy results. `arollout` and
+`arollout_group` accept the same objects and resolve awaitable operations, so
+no parallel environment hierarchy or bridge class is needed.
 
 Grading that determines reward belongs inside `step`. Single-turn environments
 may return a `Score` directly from `evaluate`; existing environments can be
@@ -78,7 +78,8 @@ environment = wrappers.GradingWrapper(
 )
 ```
 
-`AsyncGradingWrapper` follows the same contract and awaits asynchronous graders.
+`GradingWrapper` follows the same contract: its step result is immediate when
+both collaborators are immediate and awaitable otherwise.
 By default, wrappers grade terminal or truncated steps, replace the scalar
 reward with `Score.value`, and preserve the complete score under `info["score"]`.
 
@@ -176,8 +177,8 @@ wrapper code and reproducible synthetic-market tests.
 ## Rollouts
 
 The rollout layer records environment interactions while leaving sampling to
-user code. `Policy` is the synchronous callable contract and `AsyncPolicy` is
-its async-compatible counterpart. Either may return a raw action or a
+user code. `Policy` is one callable contract whose result may be immediate or
+awaitable. It may return a raw action or a
 `PolicyOutput` containing model-side information such as generated tokens and
 behavior-policy log probabilities.
 
@@ -266,8 +267,8 @@ rollout contract.
 
 ## Graders
 
-`Grader` defines one operation: `grade(input) -> Score`. `AsyncGrader` provides
-the corresponding awaitable operation. Every grader has an `input_space`
+`Grader` defines one operation: `grade(input) -> Score | Awaitable[Score]`.
+Every grader has an `input_space`
 describing its complete input, so it can safely score a response, action,
 trajectory, tool trace, or richer application-defined record.
 
@@ -279,13 +280,13 @@ Rolloutlib provides three grader families:
 - `CompositeGrader` combines complete graders while preserving their nested
   results.
 
-Each has an asynchronous counterpart.
+Each family accepts synchronous or asynchronous user-owned operations.
 
 ```python
 from rolloutlib import spaces
 from rolloutlib.graders import (
-    AsyncCompositeGrader,
-    AsyncRubricGrader,
+    CompositeGrader,
+    RubricGrader,
     Criterion,
     Level,
     RewardGrader,
@@ -344,7 +345,7 @@ async def judge(answer: str, rubric: Rubric):
     }
 
 
-rubric_grader = AsyncRubricGrader(
+rubric_grader = RubricGrader(
     rubric,
     judge,
     input_space=spaces.text.text(min_length=1),
@@ -359,7 +360,7 @@ reward_grader = RewardGrader(
     weights={"exact_match": 1.0, "has_citation": 0.1},
 )
 
-grader = AsyncCompositeGrader(
+grader = CompositeGrader(
     {"quality": rubric_grader, "verification": reward_grader},
     input_space=spaces.text.text(min_length=1),
     weights={"quality": 0.8, "verification": 0.2},

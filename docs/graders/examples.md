@@ -173,7 +173,7 @@ from typing import Protocol
 from pydantic import BaseModel, Field
 
 from rolloutlib import Criterion, Rubric
-from rolloutlib.graders import AsyncRubricGrader, Score
+from rolloutlib.graders import RubricGrader, Score
 from rolloutlib.spaces import PydanticSpace
 
 
@@ -236,7 +236,7 @@ def render_request(item: GradingInput, rubric: Rubric) -> str:
     )
 
 
-def make_grader(client: ModelClient) -> AsyncRubricGrader[GradingInput]:
+def make_grader(client: ModelClient) -> RubricGrader[GradingInput]:
     async def judge(item: GradingInput, rubric: Rubric):
         request = render_request(item, rubric)
         raw_response = await client.generate_json(request)
@@ -250,7 +250,7 @@ def make_grader(client: ModelClient) -> AsyncRubricGrader[GradingInput]:
             for criterion_id, result in response.criteria.items()
         }
 
-    return AsyncRubricGrader(
+    return RubricGrader(
         rubric,
         judge,
         input_space=grading_space,
@@ -261,7 +261,7 @@ def make_grader(client: ModelClient) -> AsyncRubricGrader[GradingInput]:
     )
 ```
 
-`AsyncRubricGrader` verifies that the parsed mapping contains exactly
+`RubricGrader` verifies that the parsed mapping contains exactly
 `correctness` and `reasoning`. A provider response that omits or invents a
 criterion fails explicitly.
 
@@ -276,8 +276,8 @@ for objective verification.
 
 ```python
 from rolloutlib.graders import (
-    AsyncCompositeGrader,
-    AsyncRubricGrader,
+    CompositeGrader,
+    RubricGrader,
     RewardGrader,
     Score,
 )
@@ -306,8 +306,8 @@ verification = RewardGrader(
 
 
 def make_hybrid_grader(client: ModelClient):
-    quality: AsyncRubricGrader[GradingInput] = make_grader(client)
-    return AsyncCompositeGrader(
+    quality: RubricGrader[GradingInput] = make_grader(client)
+    return CompositeGrader(
         {
             "quality": quality,
             "verification": verification,
@@ -393,8 +393,8 @@ assert terminated is True
 assert Score.from_info(info) == grader.grade("42")
 ```
 
-For an async environment or grader, use `AsyncGradingWrapper`. It accepts both
-sync and async graders.
+`GradingWrapper` accepts both sync and async environments and graders. Its
+result is awaitable only when one of those collaborators is awaitable.
 
 ## Combining an existing environment reward
 
@@ -496,7 +496,7 @@ def make_grader(example: EvaluationExample, client: ModelClient):
             for name, result in parsed.criteria.items()
         }
 
-    return AsyncRubricGrader(
+    return RubricGrader(
         example.rubric,
         judge,
         input_space=grading_space,

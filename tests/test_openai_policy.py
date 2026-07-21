@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -186,3 +187,31 @@ def test_openai_responses_policy_records_reasoning_summaries() -> None:
     assert output.info["reasoning_summary"] == (
         "Compared the available actions and selected two."
     )
+
+
+def test_openai_responses_policy_preserves_an_async_client_calling_style() -> None:
+    class AwaitableResponses(FakeResponses):
+        async def create(self, **request: Any) -> Any:
+            await asyncio.sleep(0)
+            return super().create(**request)
+
+    async def run() -> None:
+        client = SimpleNamespace(responses=AwaitableResponses())
+        env = wrappers.wrap_language_env(
+            SensoryEnv(),
+            state=lambda observation: observation["text"],
+            tool_name="choose",
+            argument_name="value",
+        )
+        policy = OpenAIResponsesPolicy.from_env(
+            env,
+            client=client,
+            model="test-model",
+        )
+        observation, _ = env.reset()
+
+        output = await policy(observation)
+
+        assert output.action["name"] == "choose"
+
+    asyncio.run(run())

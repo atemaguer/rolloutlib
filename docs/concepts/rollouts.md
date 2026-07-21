@@ -3,9 +3,10 @@
 A policy chooses an action from an observation. A rollout records what happened
 when a policy interacted with an environment.
 
-Rolloutlib does not own model sampling. `Policy` and `AsyncPolicy` are callable
-contracts that application code can implement using a hosted API, a local
-model, or a training backend.
+Rolloutlib does not own model sampling. `Policy` is one callable contract that
+application code can implement using a hosted API, a local model, or a training
+backend. It may return an action or `PolicyOutput` immediately, or an
+awaitable resolving to either.
 
 ## Policy outputs
 

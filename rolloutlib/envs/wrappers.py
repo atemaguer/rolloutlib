@@ -4,19 +4,17 @@ Use :mod:`rolloutlib.wrappers` for new code.
 """
 
 from ..wrappers import (
-    AsyncActionWrapper,
-    AsyncGradingWrapper,
-    AsyncObservationWrapper,
-    AsyncRewardWrapper,
-    AsyncWrapper,
+    ActionWrapper,
     GradingWrapper,
+    ObservationWrapper,
+    RewardWrapper,
+    Wrapper,
 )
 
 __all__ = [
-    "AsyncActionWrapper",
-    "AsyncGradingWrapper",
-    "AsyncObservationWrapper",
-    "AsyncRewardWrapper",
-    "AsyncWrapper",
+    "ActionWrapper",
     "GradingWrapper",
+    "ObservationWrapper",
+    "RewardWrapper",
+    "Wrapper",
 ]

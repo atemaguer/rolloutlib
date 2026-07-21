@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import inspect
 import json
 import math
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -18,7 +17,6 @@ from typing import (
     TypeAlias,
     TypeVar,
     cast,
-    final,
     overload,
 )
 
@@ -32,6 +30,7 @@ from pydantic import (
     model_validator,
 )
 
+from .._awaitables import MaybeAwaitable, is_awaitable, map_result, resolve
 from ..spaces.compatibility import check_space_compatibility, require_space
 
 
@@ -343,15 +342,6 @@ def _with_rubric_metadata(score: Score, rubric: Rubric) -> Score:
     )
 
 
-def _sync_score(value: object, *, source: str) -> Score:
-    if inspect.isawaitable(value):
-        close = getattr(value, "close", None)
-        if callable(close):
-            close()
-        raise TypeError(f"{source} returned an awaitable; use an async grader")
-    return Score.from_value(cast(Any, value))
-
-
 def _validated_input_space(
     value: Space[InputT],
     *,
@@ -361,7 +351,7 @@ def _validated_input_space(
 
 
 class Grader(Generic[InputT], ABC):
-    """Synchronous grading contract.
+    """A grading contract that preserves sync and async calling styles.
 
     The input type is application-defined. It may be a response, trajectory,
     tool trace, comparison, or richer object containing reference material.
@@ -370,15 +360,18 @@ class Grader(Generic[InputT], ABC):
 
     input_space: Space[InputT]
 
-    @final
-    def grade(self, input: InputT) -> Score:
-        """Validate and grade one input."""
+    def grade(self, input: InputT) -> MaybeAwaitable[Score]:
+        """Validate and grade one input.
+
+        The result is immediate for synchronous implementations and awaitable
+        when the implementation performs asynchronous work.
+        """
 
         self._validate_input(input)
         return self._grade(input)
 
     @abstractmethod
-    def _grade(self, input: InputT) -> Score:
+    def _grade(self, input: InputT) -> MaybeAwaitable[Score]:
         raise NotImplementedError
 
     def _validate_input(self, input: InputT) -> None:
@@ -391,47 +384,12 @@ class Grader(Generic[InputT], ABC):
             raise ValueError(
                 f"grader input is outside input_space: {input_space!r}"
             )
-
-
-class AsyncGrader(Generic[InputT], ABC):
-    """Asynchronous grading contract with the same value-level semantics."""
-
-    input_space: Space[InputT]
-
-    @final
-    async def grade(self, input: InputT) -> Score:
-        """Validate and asynchronously grade one input."""
-
-        self._validate_input(input)
-        return await self._grade(input)
-
-    @abstractmethod
-    async def _grade(self, input: InputT) -> Score:
-        raise NotImplementedError
-
-    def _validate_input(self, input: InputT) -> None:
-        try:
-            input_space = _validated_input_space(self.input_space)
-        except AttributeError as error:
-            raise TypeError("grader must define an input_space") from error
-        valid = input_space.contains(input)
-        if not valid:
-            raise ValueError(
-                f"grader input is outside input_space: {input_space!r}"
-            )
-
 
 RubricJudgeResult: TypeAlias = Mapping[str, ScoreValue]
-RubricJudge: TypeAlias = Callable[[RubricInputT, Rubric], RubricJudgeResult]
-AsyncRubricJudge: TypeAlias = Callable[
-    [RubricInputT, Rubric],
-    RubricJudgeResult | Awaitable[RubricJudgeResult],
+RubricJudge: TypeAlias = Callable[
+    [RubricInputT, Rubric], MaybeAwaitable[RubricJudgeResult]
 ]
-RewardFunction: TypeAlias = Callable[[RewardInputT], ScoreValue]
-AsyncRewardFunction: TypeAlias = Callable[
-    [RewardInputT],
-    ScoreValue | Awaitable[ScoreValue],
-]
+RewardFunction: TypeAlias = Callable[[RewardInputT], MaybeAwaitable[ScoreValue]]
 
 
 def weighted_sum(rubric: Rubric, components: ComponentScores) -> float:
@@ -564,7 +522,7 @@ def _validate_component_ids(
 
 
 class RubricGrader(Grader[RubricInputT]):
-    """Apply a bound rubric through a user-owned judge."""
+    """Apply a bound rubric through a sync or async user-owned judge."""
 
     def __init__(
         self,
@@ -581,13 +539,10 @@ class RubricGrader(Grader[RubricInputT]):
         self._aggregate = aggregate
         self._metadata = dict(metadata or {})
 
-    def _grade(self, input: RubricInputT) -> Score:
-        result = self.judge(input, self.rubric)
-        if inspect.isawaitable(result):
-            close = getattr(result, "close", None)
-            if callable(close):
-                close()
-            raise TypeError("rubric judge returned an awaitable; use AsyncRubricGrader")
+    def _grade(self, input: RubricInputT) -> MaybeAwaitable[Score]:
+        return map_result(self.judge(input, self.rubric), self._score)
+
+    def _score(self, result: RubricJudgeResult) -> Score:
         if not isinstance(result, Mapping):
             raise TypeError("rubric judge must return a mapping of criterion scores")
         components = self._resolve_components(result)
@@ -605,46 +560,8 @@ class RubricGrader(Grader[RubricInputT]):
         _validate_component_ids(result, expected, source="rubric judge")
         return {name: Score.from_value(value) for name, value in result.items()}
 
-
-class AsyncRubricGrader(AsyncGrader[RubricInputT]):
-    """Apply a bound rubric through a sync or async user-owned judge."""
-
-    def __init__(
-        self,
-        rubric: Rubric,
-        judge: AsyncRubricJudge[RubricInputT],
-        *,
-        input_space: Space[RubricInputT],
-        aggregate: RubricAggregator = weighted_mean,
-        metadata: Mapping[str, Any] | None = None,
-    ) -> None:
-        self.rubric = rubric
-        self.judge = judge
-        self.input_space = _validated_input_space(input_space)
-        self._aggregate = aggregate
-        self._metadata = dict(metadata or {})
-
-    async def _grade(self, input: RubricInputT) -> Score:
-        result = self.judge(input, self.rubric)
-        if inspect.isawaitable(result):
-            result = await result
-        if not isinstance(result, Mapping):
-            raise TypeError("rubric judge must return a mapping of criterion scores")
-        expected = {criterion.id for criterion in self.rubric.criteria}
-        _validate_component_ids(result, expected, source="rubric judge")
-        components = {name: Score.from_value(value) for name, value in result.items()}
-        return _with_rubric_metadata(
-            Score(
-                self._aggregate(self.rubric, components),
-                components,
-                self._metadata,
-            ),
-            self.rubric,
-        )
-
-
 class RewardGrader(Grader[RewardInputT]):
-    """Evaluate and aggregate named synchronous reward functions."""
+    """Evaluate and aggregate named sync or async reward functions."""
 
     def __init__(
         self,
@@ -662,53 +579,24 @@ class RewardGrader(Grader[RewardInputT]):
         self._aggregate = aggregate
         self._metadata = dict(metadata or {})
 
-    def _grade(self, input: RewardInputT) -> Score:
-        components = {
-            name: _sync_score(reward(input), source=f"reward {name!r}")
-            for name, reward in self.rewards.items()
-        }
-        value = (
-            self._aggregate(components)
-            if self._aggregate is not None
-            else _weighted_sum(components, self.weights)
-        )
-        return Score(value, components, self._metadata)
-
-
-class AsyncRewardGrader(AsyncGrader[RewardInputT]):
-    """Evaluate named sync or async reward functions concurrently."""
-
-    def __init__(
-        self,
-        rewards: Mapping[str, AsyncRewardFunction[RewardInputT]],
-        *,
-        input_space: Space[RewardInputT],
-        weights: Mapping[str, float] | None = None,
-        aggregate: ScoreAggregator | None = None,
-        metadata: Mapping[str, Any] | None = None,
-    ) -> None:
-        _validate_names(rewards, kind="reward")
-        self.rewards = dict(rewards)
-        self.weights = _resolve_weights(self.rewards, weights)
-        self.input_space = _validated_input_space(input_space)
-        self._aggregate = aggregate
-        self._metadata = dict(metadata or {})
-
-    async def _grade(self, input: RewardInputT) -> Score:
-        async def resolve(
-            name: str,
-            reward: AsyncRewardFunction[RewardInputT],
-        ) -> tuple[str, Score]:
-            value = reward(input)
-            if inspect.isawaitable(value):
-                value = await value
-            return name, Score.from_value(value)
-
-        components = dict(
-            await asyncio.gather(
-                *(resolve(name, reward) for name, reward in self.rewards.items())
+    def _grade(self, input: RewardInputT) -> MaybeAwaitable[Score]:
+        values = {name: reward(input) for name, reward in self.rewards.items()}
+        if not any(is_awaitable(value) for value in values.values()):
+            return self._score(
+                {name: Score.from_value(cast(ScoreValue, value)) for name, value in values.items()}
             )
-        )
+
+        async def collect() -> Score:
+            resolved = await asyncio.gather(*(resolve(value) for value in values.values()))
+            components = {
+                name: Score.from_value(value)
+                for name, value in zip(values, resolved, strict=True)
+            }
+            return self._score(components)
+
+        return collect()
+
+    def _score(self, components: Mapping[str, Score]) -> Score:
         value = (
             self._aggregate(components)
             if self._aggregate is not None
@@ -718,7 +606,7 @@ class AsyncRewardGrader(AsyncGrader[RewardInputT]):
 
 
 class CompositeGrader(Grader[CompositeInputT]):
-    """Aggregate nested scores from synchronous child graders."""
+    """Aggregate nested scores from sync or async child graders."""
 
     def __init__(
         self,
@@ -731,7 +619,7 @@ class CompositeGrader(Grader[CompositeInputT]):
     ) -> None:
         _validate_names(graders, kind="grader")
         if any(not isinstance(grader, Grader) for grader in graders.values()):
-            raise TypeError("CompositeGrader children must be synchronous Graders")
+            raise TypeError("CompositeGrader children must be Graders")
         self.graders = dict(graders)
         self.weights = _resolve_weights(self.graders, weights)
         self.input_space = _validated_input_space(input_space)
@@ -749,73 +637,19 @@ class CompositeGrader(Grader[CompositeInputT]):
         self._aggregate = aggregate
         self._metadata = dict(metadata or {})
 
-    def _grade(self, input: CompositeInputT) -> Score:
-        components = {
-            name: grader.grade(input) for name, grader in self.graders.items()
-        }
-        value = (
-            self._aggregate(components)
-            if self._aggregate is not None
-            else _weighted_mean(components, self.weights)
-        )
-        return Score(value, components, self._metadata)
+    def _grade(self, input: CompositeInputT) -> MaybeAwaitable[Score]:
+        values = {name: grader.grade(input) for name, grader in self.graders.items()}
+        if not any(is_awaitable(value) for value in values.values()):
+            return self._score(cast(Mapping[str, Score], values))
 
+        async def collect() -> Score:
+            resolved = await asyncio.gather(*(resolve(value) for value in values.values()))
+            components = dict(zip(values, resolved, strict=True))
+            return self._score(components)
 
-class AsyncCompositeGrader(AsyncGrader[CompositeInputT]):
-    """Aggregate nested scores from synchronous or asynchronous child graders."""
+        return collect()
 
-    def __init__(
-        self,
-        graders: Mapping[
-            str,
-            Grader[CompositeInputT] | AsyncGrader[CompositeInputT],
-        ],
-        *,
-        input_space: Space[CompositeInputT],
-        weights: Mapping[str, float] | None = None,
-        aggregate: ScoreAggregator | None = None,
-        metadata: Mapping[str, Any] | None = None,
-    ) -> None:
-        _validate_names(graders, kind="grader")
-        if any(
-            not isinstance(grader, (Grader, AsyncGrader))
-            for grader in graders.values()
-        ):
-            raise TypeError(
-                "AsyncCompositeGrader children must be Graders or AsyncGraders"
-            )
-        self.graders = dict(graders)
-        self.weights = _resolve_weights(self.graders, weights)
-        self.input_space = _validated_input_space(input_space)
-        for name, grader in self.graders.items():
-            child_space = _validated_input_space(
-                grader.input_space,
-                name=f"grader {name!r} input_space",
-            )
-            check_space_compatibility(
-                self.input_space,
-                child_space,
-                produced_name="composite input_space",
-                accepted_name=f"grader {name!r} input_space",
-            )
-        self._aggregate = aggregate
-        self._metadata = dict(metadata or {})
-
-    async def _grade(self, input: CompositeInputT) -> Score:
-        async def resolve(
-            name: str,
-            grader: Grader[CompositeInputT] | AsyncGrader[CompositeInputT],
-        ) -> tuple[str, Score]:
-            value = grader.grade(input)
-            if inspect.isawaitable(value):
-                value = await value
-            return name, value
-
-        components = dict(
-            await asyncio.gather(
-                *(resolve(name, grader) for name, grader in self.graders.items())
-            )
-        )
+    def _score(self, components: Mapping[str, Score]) -> Score:
         value = (
             self._aggregate(components)
             if self._aggregate is not None
@@ -825,12 +659,6 @@ class AsyncCompositeGrader(AsyncGrader[CompositeInputT]):
 
 
 __all__ = [
-    "AsyncCompositeGrader",
-    "AsyncGrader",
-    "AsyncRewardFunction",
-    "AsyncRewardGrader",
-    "AsyncRubricJudge",
-    "AsyncRubricGrader",
     "CompositeGrader",
     "Criterion",
     "Grader",

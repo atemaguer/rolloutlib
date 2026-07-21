@@ -6,10 +6,6 @@ import gymnasium as gym
 import pytest
 
 from rolloutlib.graders import (
-    AsyncCompositeGrader,
-    AsyncGrader,
-    AsyncRewardGrader,
-    AsyncRubricGrader,
     CompositeGrader,
     Criterion,
     Grader,
@@ -130,19 +126,19 @@ def test_async_rubric_grader_accepts_a_sync_or_async_judge() -> None:
             await asyncio.sleep(0)
             return {"correctness": float(answer == "42"), "format": 1.0}
 
-        async_grader = AsyncRubricGrader(
+        async_grader = RubricGrader(
             rubric,
             judge,
             input_space=ANSWER_SPACE,
         )
-        sync_grader = AsyncRubricGrader(
+        sync_grader = RubricGrader(
             rubric,
             lambda answer, rubric: {"correctness": 1.0, "format": 1.0},
             input_space=ANSWER_SPACE,
         )
 
         assert (await async_grader.grade("42")).value == 1.0
-        assert (await sync_grader.grade("42")).value == 1.0
+        assert sync_grader.grade("42").value == 1.0
 
     asyncio.run(run())
 
@@ -205,7 +201,7 @@ def test_async_reward_grader_runs_rewards_concurrently() -> None:
             await release.wait()
             return 1.0
 
-        grader = AsyncRewardGrader(
+        grader = RewardGrader(
             {"first": reward, "second": reward},
             input_space=PydanticSpace(object),
         )
@@ -269,11 +265,11 @@ def test_async_composite_grader_accepts_sync_and_async_children() -> None:
             await asyncio.sleep(0)
             return 0.5
 
-        async_grader = AsyncRewardGrader[str](
+        async_grader = RewardGrader[str](
             {"style": slow},
             input_space=ANSWER_SPACE,
         )
-        grader = AsyncCompositeGrader[str](
+        grader = CompositeGrader[str](
             {"verification": sync_grader, "quality": async_grader},
             input_space=ANSWER_SPACE,
         )
@@ -336,14 +332,14 @@ def test_grader_contracts_are_nominal_and_enforce_input_spaces() -> None:
             called = True
             return Score(float(input == "42"))
 
-    class AsyncExactMatchGrader(AsyncGrader[str]):
+    class AwaitableExactMatchGrader(Grader[str]):
         input_space = ANSWER_SPACE
 
         async def _grade(self, input: str) -> Score:
             return Score(float(input == "42"))
 
     grader: Grader[str] = ExactMatchGrader()
-    async_grader: AsyncGrader[str] = AsyncExactMatchGrader()
+    async_grader: Grader[str] = AwaitableExactMatchGrader()
 
     assert grader.grade("42") == Score(1.0)
     assert asyncio.run(async_grader.grade("42")) == Score(1.0)

@@ -1,16 +1,14 @@
-"""Synchronous and asynchronous environment foundations."""
+"""Unified synchronous and asynchronous environment foundations."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import math
-from typing import Any, Generic, TypeVar
+from typing import Any, TypeAlias, TypeVar
 
 import gymnasium as gym
-import numpy as np
-from gymnasium.spaces import Space
-from gymnasium.utils import seeding
 
+from .._awaitables import MaybeAwaitable, map_result
 from ..graders import Score, ScoreValue
 from ..spaces.compatibility import check_space_value, require_space
 
@@ -18,20 +16,14 @@ from ..spaces.compatibility import check_space_value, require_space
 ObsT = TypeVar("ObsT")
 ActT = TypeVar("ActT")
 
-
+ResetResult: TypeAlias = tuple[ObsT, dict[str, Any]]
+StepResult: TypeAlias = tuple[ObsT, float, bool, bool, dict[str, Any]]
 EvaluationResult = ScoreValue | tuple[ScoreValue, dict[str, Any]]
 
 
 def _resolve_evaluation(value: EvaluationResult) -> tuple[float, dict[str, Any]]:
-    """Convert an evaluation result into a scalar reward and info mapping.
+    """Convert an evaluation result into a scalar reward and info mapping."""
 
-    Args:
-        value: A scalar score or a score paired with additional step info.
-
-    Returns:
-        A ``(reward, info)`` tuple with any structured score serialized into
-        the info mapping.
-    """
     if isinstance(value, tuple):
         result, info = value
     else:
@@ -49,106 +41,47 @@ def _resolve_evaluation(value: EvaluationResult) -> tuple[float, dict[str, Any]]
         raise ValueError("evaluation score must be finite")
     return reward, resolved_info
 
-# A convenience alias, deliberately not a Rolloutlib subclass. Synchronous
-# implementations therefore retain exact Gymnasium identity and compatibility.
-Env = gym.Env
 
+class Env(gym.Env[ObsT, ActT], ABC):
+    """An environment whose operations may return values or awaitables.
 
-class AsyncEnv(Generic[ObsT, ActT], ABC):
-    """Async counterpart to :class:`gymnasium.Env`.
+    ``reset``, ``step``, and ``close`` have the usual Gymnasium value-level
+    contract. Implementations can define each operation with either ``def`` or
+    ``async def``. Synchronous consumers require immediate values; async
+    consumers await an operation only when it is awaitable.
 
-    The value-level contract intentionally matches Gymnasium: environments expose
-    action and observation spaces, ``reset`` returns ``(observation, info)``, and
-    ``step`` returns the standard five-tuple. Only the calling convention differs.
-
-    Native implementations should call ``await super().reset(seed=seed)`` at the
-    beginning of ``reset`` to opt into Gymnasium-compatible RNG handling.
+    Async ``reset`` implementations should call ``super().reset(seed=seed)``
+    without awaiting it to retain Gymnasium's RNG handling.
     """
 
-    metadata: dict[str, Any] = {"render_modes": []}
-    action_space: Space[ActT]
-    observation_space: Space[ObsT]
-
-    _np_random: np.random.Generator | None = None
-    _np_random_seed: int | None = None
-
-    @abstractmethod
-    async def reset(
+    def reset(
         self,
         *,
         seed: int | None = None,
         options: dict[str, Any] | None = None,
-    ) -> tuple[ObsT, dict[str, Any]]:
-        """Reset the environment and return its first observation and info.
+    ) -> Any:
+        """Initialize Gymnasium RNG state for subclasses that call ``super``."""
 
-        Args:
-            seed: Optional seed used to initialize the environment RNG.
-            options: Optional application-defined reset options.
-
-        Returns:
-            The initial observation and an info dictionary.
-        """
-        if seed is not None:
-            self._np_random, self._np_random_seed = seeding.np_random(seed)
+        del options
+        super().reset(seed=seed)
+        return None
 
     @abstractmethod
-    async def step(
-        self, action: ActT
-    ) -> tuple[ObsT, float, bool, bool, dict[str, Any]]:
-        """Advance the environment by one step.
+    def step(self, action: ActT) -> Any:
+        """Advance the environment by one action."""
 
-        Args:
-            action: Action accepted by ``action_space``.
-
-        Returns:
-            The Gymnasium five-tuple ``(observation, reward, terminated,
-            truncated, info)``.
-        """
         raise NotImplementedError
 
-    async def close(self) -> None:
-        """Release resources owned by the environment.
+    def close(self) -> Any:
+        """Release environment resources when the implementation owns any."""
 
-        Returns:
-            ``None``.
-        """
-
-    @property
-    def np_random(self) -> np.random.Generator:
-        """Return the environment RNG, initializing it lazily when necessary.
-
-        Returns:
-            The NumPy random generator used by the environment.
-        """
-        if self._np_random is None:
-            self._np_random, self._np_random_seed = seeding.np_random()
-        return self._np_random
-
-    @property
-    def np_random_seed(self) -> int:
-        """Return the seed associated with :attr:`np_random`.
-
-        Returns:
-            The integer seed associated with the environment RNG.
-        """
-        if self._np_random_seed is None:
-            self._np_random, self._np_random_seed = seeding.np_random()
-        return self._np_random_seed
+        return None
 
 
-class SingleTurnEnv(gym.Env[ObsT, ActT], ABC):
-    """Gymnasium environment whose first action completes the episode.
-
-    Subclasses provide the initial and terminal observations plus an evaluator.
-    The base class owns the reset/step lifecycle and standard Gymnasium results.
-    """
+class SingleTurnEnv(Env[ObsT, ActT], ABC):
+    """A one-action environment with synchronous or asynchronous hooks."""
 
     def __init__(self) -> None:
-        """Initialize an inactive single-turn environment.
-
-        Returns:
-            ``None``.
-        """
         super().__init__()
         self._episode_active = False
 
@@ -157,57 +90,50 @@ class SingleTurnEnv(gym.Env[ObsT, ActT], ABC):
         *,
         seed: int | None = None,
         options: dict[str, Any] | None = None,
-    ) -> tuple[ObsT, dict[str, Any]]:
-        """Reset the episode and return its initial observation and info.
+    ) -> MaybeAwaitable[ResetResult[ObsT]]:
+        """Reset and obtain the initial observation from the implementation."""
 
-        Args:
-            seed: Optional seed used to initialize the Gymnasium RNG.
-            options: Optional application-defined reset options.
-
-        Returns:
-            The observation and info produced by ``initial_observation``.
-        """
-        super().reset(seed=seed)
+        gym.Env.reset(self, seed=seed)
         require_space(self.action_space, name="environment action_space")
         require_space(self.observation_space, name="environment observation_space")
-        observation, info = self.initial_observation(options=options)
-        check_space_value(
-            self.observation_space,
-            observation,
-            name="initial observation",
-        )
-        if not isinstance(info, dict):
-            raise TypeError("initial observation info must be a dictionary")
-        self._episode_active = True
-        return observation, info
 
-    def step(self, action: ActT) -> tuple[ObsT, float, bool, bool, dict[str, Any]]:
-        """Evaluate one action and complete the single-turn episode.
+        def finish(value: ResetResult[ObsT]) -> ResetResult[ObsT]:
+            observation, info = value
+            check_space_value(
+                self.observation_space,
+                observation,
+                name="initial observation",
+            )
+            if not isinstance(info, dict):
+                raise TypeError("initial observation info must be a dictionary")
+            self._episode_active = True
+            return observation, info
 
-        Args:
-            action: Action accepted by ``action_space``.
+        return map_result(self.initial_observation(options=options), finish)
 
-        Returns:
-            A terminal Gymnasium five-tuple containing the evaluated reward.
-        """
+    def step(self, action: ActT) -> MaybeAwaitable[StepResult[ObsT]]:
+        """Evaluate one action and complete the episode."""
+
         self._require_active_episode()
         check_space_value(self.action_space, action, name="environment action")
-        reward, info = _resolve_evaluation(self.evaluate(action))
-        observation = self.terminal_observation(action)
-        check_space_value(
-            self.observation_space,
-            observation,
-            name="terminal observation",
-        )
-        self._episode_active = False
-        return observation, reward, True, False, info
+
+        def after_evaluation(evaluation: EvaluationResult) -> MaybeAwaitable[StepResult[ObsT]]:
+            reward, info = _resolve_evaluation(evaluation)
+
+            def finish(observation: ObsT) -> StepResult[ObsT]:
+                check_space_value(
+                    self.observation_space,
+                    observation,
+                    name="terminal observation",
+                )
+                self._episode_active = False
+                return observation, reward, True, False, info
+
+            return map_result(self.terminal_observation(action), finish)
+
+        return map_result(self.evaluate(action), after_evaluation)
 
     def _require_active_episode(self) -> None:
-        """Raise ``RuntimeError`` unless an episode is currently active.
-
-        Returns:
-            ``None``.
-        """
         if not self._episode_active:
             raise RuntimeError(
                 "reset() must be called before step() and after an episode ends"
@@ -216,150 +142,22 @@ class SingleTurnEnv(gym.Env[ObsT, ActT], ABC):
     @abstractmethod
     def initial_observation(
         self, *, options: dict[str, Any] | None = None
-    ) -> tuple[ObsT, dict[str, Any]]:
-        """Return the observation and info presented by ``reset``.
+    ) -> MaybeAwaitable[ResetResult[ObsT]]:
+        """Return the initial observation and its info mapping."""
 
-        Args:
-            options: Optional application-defined reset options.
-
-        Returns:
-            The initial observation and its info dictionary.
-        """
         raise NotImplementedError
 
     @abstractmethod
-    def evaluate(self, action: ActT) -> EvaluationResult:
-        """Grade an action and return its score, optionally with extra info.
+    def evaluate(self, action: ActT) -> MaybeAwaitable[EvaluationResult]:
+        """Score an action, optionally with additional step information."""
 
-        Args:
-            action: Action to evaluate.
-
-        Returns:
-            A scalar or structured score, optionally paired with step info.
-        """
         raise NotImplementedError
 
     @abstractmethod
-    def terminal_observation(self, action: ActT) -> ObsT:
-        """Return the terminal observation produced after an action.
+    def terminal_observation(self, action: ActT) -> MaybeAwaitable[ObsT]:
+        """Return the observation after the action has completed the episode."""
 
-        Args:
-            action: Action that completed the episode.
-
-        Returns:
-            The terminal observation.
-        """
         raise NotImplementedError
 
 
-class AsyncSingleTurnEnv(AsyncEnv[ObsT, ActT], ABC):
-    """Async environment whose first action completes the episode."""
-
-    def __init__(self) -> None:
-        """Initialize an inactive asynchronous single-turn environment.
-
-        Returns:
-            ``None``.
-        """
-        self._episode_active = False
-
-    async def reset(
-        self,
-        *,
-        seed: int | None = None,
-        options: dict[str, Any] | None = None,
-    ) -> tuple[ObsT, dict[str, Any]]:
-        """Reset the episode and return its initial observation and info.
-
-        Args:
-            seed: Optional seed used to initialize the environment RNG.
-            options: Optional application-defined reset options.
-
-        Returns:
-            The observation and info produced by ``initial_observation``.
-        """
-        await super().reset(seed=seed, options=options)
-        require_space(self.action_space, name="environment action_space")
-        require_space(self.observation_space, name="environment observation_space")
-        observation, info = await self.initial_observation(options=options)
-        check_space_value(
-            self.observation_space,
-            observation,
-            name="initial observation",
-        )
-        if not isinstance(info, dict):
-            raise TypeError("initial observation info must be a dictionary")
-        self._episode_active = True
-        return observation, info
-
-    async def step(
-        self, action: ActT
-    ) -> tuple[ObsT, float, bool, bool, dict[str, Any]]:
-        """Evaluate one action and complete the asynchronous episode.
-
-        Args:
-            action: Action accepted by ``action_space``.
-
-        Returns:
-            A terminal Gymnasium five-tuple containing the evaluated reward.
-        """
-        self._require_active_episode()
-        check_space_value(self.action_space, action, name="environment action")
-        reward, info = _resolve_evaluation(await self.evaluate(action))
-        observation = await self.terminal_observation(action)
-        check_space_value(
-            self.observation_space,
-            observation,
-            name="terminal observation",
-        )
-        self._episode_active = False
-        return observation, reward, True, False, info
-
-    def _require_active_episode(self) -> None:
-        """Raise ``RuntimeError`` unless an episode is currently active.
-
-        Returns:
-            ``None``.
-        """
-        if not self._episode_active:
-            raise RuntimeError(
-                "reset() must be called before step() and after an episode ends"
-            )
-
-    @abstractmethod
-    async def initial_observation(
-        self, *, options: dict[str, Any] | None = None
-    ) -> tuple[ObsT, dict[str, Any]]:
-        """Return the observation and info presented by ``reset``.
-
-        Args:
-            options: Optional application-defined reset options.
-
-        Returns:
-            The initial observation and its info dictionary.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    async def evaluate(self, action: ActT) -> EvaluationResult:
-        """Grade an action and return its score, optionally with extra info.
-
-        Args:
-            action: Action to evaluate.
-
-        Returns:
-            A scalar or structured score, optionally paired with step info.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    async def terminal_observation(self, action: ActT) -> ObsT:
-        """Return the terminal observation produced after an action.
-
-        Args:
-            action: Action that completed the episode.
-
-        Returns:
-            The terminal observation.
-        """
-        raise NotImplementedError
+__all__ = ["Env", "EvaluationResult", "ResetResult", "SingleTurnEnv", "StepResult"]

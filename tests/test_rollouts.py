@@ -8,7 +8,7 @@ import gymnasium as gym
 import pytest
 
 from rolloutlib import spaces
-from rolloutlib.envs import AsyncEnv
+from rolloutlib.envs import Env
 from rolloutlib.graders import Score
 from rolloutlib.rollouts import (
     PolicyOutput,
@@ -54,7 +54,7 @@ class CountingEnv(gym.Env[int, int]):
         self.closed = True
 
 
-class AsyncCountingEnv(AsyncEnv[int, int]):
+class AwaitableCountingEnv(Env[int, int]):
     action_space = gym.spaces.Discrete(2)
     observation_space = gym.spaces.Discrete(4)
 
@@ -69,7 +69,7 @@ class AsyncCountingEnv(AsyncEnv[int, int]):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[int, dict[str, Any]]:
-        await super().reset(seed=seed, options=options)
+        super().reset(seed=seed, options=options)
         self.value = 0
         return self.value, {"target": self.target}
 
@@ -212,16 +212,16 @@ def test_rollout_group_closes_envs_and_preserves_environment_scores() -> None:
 
 def test_async_rollout_group_supports_async_policies_and_bounded_concurrency() -> None:
     async def run() -> None:
-        environment = AsyncCountingEnv()
+        environment = AwaitableCountingEnv()
         trajectory = await arollout(environment, lambda _: 0)
         assert trajectory.complete is True
         assert trajectory.terminated is True
         await environment.close()
 
-        environments: list[AsyncCountingEnv] = []
+        environments: list[AwaitableCountingEnv] = []
 
-        def make_env(item: int) -> AsyncCountingEnv:
-            environment = AsyncCountingEnv(target=item)
+        def make_env(item: int) -> AwaitableCountingEnv:
+            environment = AwaitableCountingEnv(target=item)
             environments.append(environment)
             return environment
 
@@ -261,12 +261,12 @@ def test_group_requires_exactly_one_scalar_or_batch_policy() -> None:
 
     async def run() -> None:
         with pytest.raises(ValueError, match="exactly one"):
-            await arollout_group(1, AsyncCountingEnv)
+            await arollout_group(1, AwaitableCountingEnv)
 
         with pytest.raises(ValueError, match="exactly one"):
             await arollout_group(
                 1,
-                AsyncCountingEnv,
+                AwaitableCountingEnv,
                 lambda _: 0,
                 batch_policy=lambda observations: [0] * len(observations),
             )
@@ -432,11 +432,11 @@ def test_rollout_group_closes_partial_batch_when_factory_fails() -> None:
 
 def test_arollout_group_shrinks_active_batches() -> None:
     async def run() -> None:
-        environments: list[AsyncCountingEnv] = []
+        environments: list[AwaitableCountingEnv] = []
         batch_sizes: list[int] = []
 
-        def make_env(_: None) -> AsyncCountingEnv:
-            environment = AsyncCountingEnv(target=len(environments) + 1)
+        def make_env(_: None) -> AwaitableCountingEnv:
+            environment = AwaitableCountingEnv(target=len(environments) + 1)
             environments.append(environment)
             return environment
 
@@ -475,10 +475,10 @@ def test_arollout_group_shrinks_active_batches() -> None:
 
 def test_arollout_group_validates_batch_actions_before_any_active_step() -> None:
     async def run() -> None:
-        environments: list[AsyncCountingEnv] = []
+        environments: list[AwaitableCountingEnv] = []
 
-        def make_env(_: None) -> AsyncCountingEnv:
-            environment = AsyncCountingEnv(target=1)
+        def make_env(_: None) -> AwaitableCountingEnv:
+            environment = AwaitableCountingEnv(target=1)
             environments.append(environment)
             return environment
 
@@ -501,13 +501,13 @@ def test_arollout_group_bounds_batched_async_environment_creation() -> None:
         active_creations = 0
         maximum_creations = 0
 
-        async def make_env(_: None) -> AsyncCountingEnv:
+        async def make_env(_: None) -> AwaitableCountingEnv:
             nonlocal active_creations, maximum_creations
             active_creations += 1
             maximum_creations = max(maximum_creations, active_creations)
             await asyncio.sleep(0)
             active_creations -= 1
-            return AsyncCountingEnv(target=1)
+            return AwaitableCountingEnv(target=1)
 
         await arollout_group(
             None,

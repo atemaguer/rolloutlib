@@ -152,21 +152,20 @@ flags, and info mappings as the episode runs. Wrappers similarly validate their
 transformed values. Use `spaces.check_space_value(space, value, name=...)` when
 building another composition point.
 
-## Asynchronous environments
+## Awaitable operations
 
-`AsyncEnv` preserves the same observations, actions, rewards, termination
-flags, and information while making `reset`, `step`, and `close` awaitable.
-It is useful for tool execution, remote services, browsers, and other
-asynchronous resources.
+`Env` is the single environment contract. Its `reset`, `step`, and `close`
+methods may return their normal Gymnasium values directly or awaitables that
+resolve to those values. This supports tool execution, remote services,
+browsers, and other asynchronous resources without a second hierarchy.
 
-`as_async` lifts a Gymnasium environment into the async convention without
-blocking the event loop. `as_sync` exposes an async environment through the
-synchronous Gymnasium API. Calls on a single bridged instance are serialized;
-parallelism belongs across independent environment instances.
+Use `rollout` with immediate operations. Use `arollout` or `arollout_group`
+when an environment or policy may perform asynchronous work; those collectors
+accept the same `Env` instance and resolve awaitables as needed.
 
 ## Single-turn tasks
 
-`SingleTurnEnv` and `AsyncSingleTurnEnv` cover tasks where one action completes
+`SingleTurnEnv` covers tasks where one action completes
 the episode. Subclasses define:
 
 - the initial observation;
@@ -179,8 +178,8 @@ become the scalar reward while remaining available under `info["score"]`.
 ## Adding grading to an environment
 
 Grading that determines reward belongs inside `step`. If an existing
-environment does not grade its own terminal state, `GradingWrapper` or
-`AsyncGradingWrapper` can compose it with a grader.
+environment does not grade its own terminal state, `GradingWrapper` can
+compose it with a grader.
 
 ```python
 from rolloutlib import wrappers
